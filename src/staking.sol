@@ -7,7 +7,7 @@ contract StakingPool is IStakingPool {
     address public stakingToken;
     address public rewardToken;
     
-    constructor(address _stakingToken, address _rewardToken) {
+    constructor(address _stakingToken, address _rewardToken, address _admin, address _operator) {
         stakingToken = _stakingToken;
         rewardToken = _rewardToken;
     }

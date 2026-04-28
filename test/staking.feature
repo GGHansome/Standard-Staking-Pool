@@ -29,6 +29,12 @@ Feature: V1 Standard Dual-Token Staking Pool
     And the user's staked balance should become 150
     And the total supply of the pool should increase by 50
 
+  Scenario: User attempts to stake 0 tokens
+    Given a user has 100 STK in their wallet
+    When the user calls "stake" with 0 STK
+    Then the transaction should revert
+    And the error message should indicate "Must be greater than 0"
+
   # ------------------------------------------------------------------
   # 2. Withdrawing (提取本金)
   # ------------------------------------------------------------------
@@ -45,6 +51,12 @@ Feature: V1 Standard Dual-Token Staking Pool
     When the user attempts to call "withdraw" with 150 STK
     Then the transaction should revert
     And the error message should indicate insufficient balance
+
+  Scenario: User attempts to withdraw 0 tokens
+    Given a user has a staked balance of 100 STK
+    When the user attempts to call "withdraw" with 0 STK
+    Then the transaction should revert
+    And the error message should indicate "Must be greater than 0"
 
   # ------------------------------------------------------------------
   # 3. Claiming Rewards (领取收益)
@@ -72,7 +84,8 @@ Feature: V1 Standard Dual-Token Staking Pool
   # ------------------------------------------------------------------
   Scenario: Operator starts a new reward period
     Given there is no active reward period
-    And the contract holds at least 7000 REWARD
+    And the operator has 7000 REWARD in their wallet
+    And the operator has approved the Staking Pool to spend 7000 REWARD
     When the operator calls "notifyRewardAmount" with 7000 REWARD
     Then the reward rate should be set to 7000 divided by the reward duration
     And a new reward period should start
@@ -81,25 +94,48 @@ Feature: V1 Standard Dual-Token Staking Pool
   Scenario: Operator injects rewards before the current period ends (Reward Smoothing)
     Given the current reward period has 3 days remaining
     And there are 3000 REWARD left undistributed in the current period
-    And the contract holds at least an additional 4000 REWARD
+    And the operator has approved the Staking Pool to spend at least 4000 REWARD
     When the operator calls "notifyRewardAmount" with 4000 REWARD
     Then the new reward rate should be calculated based on the sum of 3000 and 4000 (total 7000)
     And the reward duration should be reset to a full 7 days
 
-  Scenario: Operator attempts to inject rewards without sufficient contract balance
-    Given the contract holds only 1000 REWARD
+  Scenario: Operator attempts to inject rewards without sufficient approval or balance
+    Given the operator has only approved 1000 REWARD
     When the operator attempts to call "notifyRewardAmount" with 5000 REWARD
     Then the transaction should revert
-    And the error message should be "Reward amount too high"
+    And the error message should relate to ERC20 insufficient allowance or balance
+
+  Scenario: Operator attempts to inject 0 rewards
+    Given the operator is authorized
+    When the operator attempts to call "notifyRewardAmount" with 0 REWARD
+    Then the transaction should revert
+    And the error message should indicate "Must be greater than 0"
 
   # ------------------------------------------------------------------
-  # 6. Admin Privileges & Risk Management (管理员特权与风控)
+  # 6. Reward Leakage (空窗期奖励归属)
+  # ------------------------------------------------------------------
+  Scenario: Rewards leak and permanently stay in contract when total supply is zero
+    Given a reward period is active with a reward rate of 1 REWARD per second
+    And the total supply of the pool is 0
+    When 10 seconds pass
+    Then 10 REWARD should be considered leaked
+    And the leaked REWARD should permanently remain in the contract
+    And the leaked REWARD cannot be claimed by the next staker
+
+  # ------------------------------------------------------------------
+  # 7. Admin Privileges & Risk Management (管理员特权与风控)
   # ------------------------------------------------------------------
   Scenario: Graceful degradation during emergency pause
     Given the contract is in a "Paused" state
     When a user attempts to call "stake"
     Then the transaction should revert
-    When a user attempts to call "withdraw" or "getReward"
+    When an operator attempts to call "notifyRewardAmount"
+    Then the transaction should revert
+    When an admin attempts to call "setRewardsDuration"
+    Then the transaction should revert
+    When a user attempts to call "withdraw" or "getReward" or "exit"
+    Then the transaction should succeed
+    When the admin attempts to call the rescue function for an unsupported ERC20
     Then the transaction should succeed
 
   Scenario: Admin rescues accidentally transferred tokens
@@ -108,3 +144,33 @@ Feature: V1 Standard Dual-Token Staking Pool
     Then the admin should successfully receive 100 USDC
     When the admin attempts to call the rescue function for STK or REWARD
     Then the transaction should revert to protect core assets
+
+  Scenario: Admin attempts to set reward duration to 0
+    Given the current reward period has ended
+    When the admin attempts to call "setRewardsDuration" with 0
+    Then the transaction should revert
+    And the error message should indicate "Must be greater than 0"
+
+  # ------------------------------------------------------------------
+  # 8. Access Control & Roles (权限控制)
+  # ------------------------------------------------------------------
+  Scenario: Non-operator attempts to call notifyRewardAmount
+    Given a user does not have the OPERATOR_ROLE
+    When the user attempts to call "notifyRewardAmount"
+    Then the transaction should revert
+    And the error message should relate to AccessControl
+
+  Scenario: Non-admin attempts to call admin functions
+    Given a user does not have the DEFAULT_ADMIN_ROLE
+    When the user attempts to call "setRewardsDuration", "pause", or "recoverERC20"
+    Then the transaction should revert
+    And the error message should relate to AccessControl
+
+  Scenario: Admin cannot call notifyRewardAmount unless granted operator role
+    Given an admin has the DEFAULT_ADMIN_ROLE but not the OPERATOR_ROLE
+    When the admin attempts to call "notifyRewardAmount"
+    Then the transaction should revert
+    And the error message should relate to AccessControl
+    When the admin grants the OPERATOR_ROLE to themselves
+    And the admin attempts to call "notifyRewardAmount" again
+    Then the transaction should not revert due to AccessControl

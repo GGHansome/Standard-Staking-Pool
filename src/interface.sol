@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/access/IAccessControl.sol";
+
 /**
  * @title IStakingPool
  * @dev V1 标准双币质押收益池接口 (Standard Dual-Token Staking Pool)
  * 采用无锁仓随存随取模型（Flexible Staking），依托水位线模型进行奖励分发。
  */
-interface IStakingPool {
+interface IStakingPool is IAccessControl {
     /* ============ 事件 (Events) ============ */
 
     event Staked(address indexed user, uint256 amount);
@@ -17,6 +19,31 @@ interface IStakingPool {
     event Recovered(address token, uint256 amount);
 
     /* ============ 视图函数 (View Functions) ============ */
+
+    /**
+     * @notice 获取质押代币 (Staking Token) 的合约地址
+     */
+    function stakingToken() external view returns (address);
+
+    /**
+     * @notice 获取奖励代币 (Reward Token) 的合约地址
+     */
+    function rewardToken() external view returns (address);
+
+    /**
+     * @notice 当前奖励周期的结束时间戳
+     */
+    function periodFinish() external view returns (uint256);
+
+    /**
+     * @notice 最近一次全局奖励更新的时间戳
+     */
+    function lastUpdateTime() external view returns (uint256);
+
+    /**
+     * @notice 查询合约当前是否处于暂停状态
+     */
+    function paused() external view returns (bool);
 
     /**
      * @notice 当前资金池内的总锁仓量 (TVL)
@@ -80,6 +107,16 @@ interface IStakingPool {
     function exit() external;
 
     /* ============ 管理员/运营操作 (Admin/Operator Functions) ============ */
+
+    /**
+     * @notice 触发紧急暂停 (仅限拥有相应权限的角色调用)
+     */
+    function pause() external;
+
+    /**
+     * @notice 解除紧急暂停 (仅限拥有相应权限的角色调用)
+     */
+    function unpause() external;
 
     /**
      * @notice 注入新的奖励并触发新的发奖周期 (仅限 Operator/Owner 调用)

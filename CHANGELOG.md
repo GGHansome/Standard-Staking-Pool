@@ -12,9 +12,14 @@
 - 绝对隔离逃生舱权限：完善 4.2 节特权操作，明确规定代码层面必须强行阻断 `recoverERC20` 提取 `stakingToken` 和 `rewardToken`，拒绝一切核心资产的救援。（原因：若允许救援同币/核心资产，需额外增加两个全局状态变量 `historicalNotified`（历史总注入奖励）和 `historicalClaimed`（历史总提取奖励）来精确分离“用户本金+待领奖励”与“可提取流失资产”。这不仅增加了系统复杂度和充提操作的 Gas 消耗，更会因“官方拥有提取核心资产的特权后门”而引发被 Rug Pull 的担忧，严重削弱社区信任度。）
 - 增加零值操作限制：新增 4.3 节，强制要求所有状态变更函数（`stake`, `withdraw`, `notifyRewardAmount`, `setRewardsDuration`）的输入值必须大于 0，防止无效事件污染和 Gas 空耗。
 
+- **完善 `notifyRewardAmount` 描述**：明确要求通过本函数原子化 `safeTransferFrom` 注入奖励，禁止手动转账后 notify，避免牺牲 CEI 规范或漏掉旧周期收益结算。
+- **完善 `exit` 逻辑细节**：明确 `exit()` 必须在用户本金 `balance > 0` 时才调用内部 `withdraw`，否则仅执行 `getReward`，避免因 `withdraw(0)` 触发零值校验而导致 `exit` 失败。
+
 **src/interface.sol**
 - **接口自文档化继承**：`IStakingPool` 接口现直接继承 OpenZeppelin 的 `IAccessControl`，向前端和外部合约显式暴露 `grantRole` 和 `revokeRole` 等标准权限管理方法。
 - 新增资产查询接口：`stakingToken()`, `rewardToken()`。
 - 新增时间周期查询接口：`periodFinish()`, `lastUpdateTime()`。
 - 新增暂停状态查询接口：`paused()`。
 - 新增暂停管理接口：`pause()`, `unpause()`。
+
+- **暴露角色常量标识符**：在 `IStakingPool` 接口中显式声明了 `OPERATOR_ROLE() external view returns (bytes32)`，以便前端或外部合约能够获取该角色的 `bytes32` 标识符，从而正确调用继承自 `IAccessControl` 的 `hasRole/grantRole/revokeRole` 方法。

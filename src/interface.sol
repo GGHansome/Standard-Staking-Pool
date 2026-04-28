@@ -21,6 +21,12 @@ interface IStakingPool is IAccessControl {
     /* ============ 视图函数 (View Functions) ============ */
 
     /**
+     * @notice 获取 OPERATOR_ROLE 的常量标识符
+     * @dev 前端和外部合约需要此标识符来调用 hasRole/grantRole 等方法
+     */
+    function OPERATOR_ROLE() external view returns (bytes32);
+
+    /**
      * @notice 获取质押代币 (Staking Token) 的合约地址
      */
     function stakingToken() external view returns (address);
@@ -86,13 +92,13 @@ interface IStakingPool is IAccessControl {
 
     /**
      * @notice 质押代币入池
-     * @param amount 质押数量
+     * @param amount 质押数量 (必须大于 0)
      */
     function stake(uint256 amount) external;
 
     /**
      * @notice 提取本金出池
-     * @param amount 提取数量
+     * @param amount 提取数量 (必须大于 0)
      */
     function withdraw(uint256 amount) external;
 
@@ -103,36 +109,37 @@ interface IStakingPool is IAccessControl {
 
     /**
      * @notice 一键退出：提取所有本金并领取所有奖励
+     * @dev 仅当本金余额大于 0 时才执行 withdraw，避免零值校验失败
      */
     function exit() external;
 
     /* ============ 管理员/运营操作 (Admin/Operator Functions) ============ */
 
     /**
-     * @notice 触发紧急暂停 (仅限拥有相应权限的角色调用)
+     * @notice 触发紧急暂停 (仅限 Admin 调用)
      */
     function pause() external;
 
     /**
-     * @notice 解除紧急暂停 (仅限拥有相应权限的角色调用)
+     * @notice 解除紧急暂停 (仅限 Admin 调用)
      */
     function unpause() external;
 
     /**
-     * @notice 注入新的奖励并触发新的发奖周期 (仅限 Operator/Owner 调用)
-     * @param reward 注入的奖励代币数量
+     * @notice 注入新的奖励并触发新的发奖周期 (仅限 Operator 调用)
+     * @param reward 注入的奖励代币数量 (必须大于 0)
      */
     function notifyRewardAmount(uint256 reward) external;
 
     /**
-     * @notice 设置奖励周期 (仅限 Owner 调用)
-     * @param _rewardsDuration 新的奖励周期持续时间（秒）
+     * @notice 设置奖励周期 (仅限 Admin 调用)
+     * @param _rewardsDuration 新的奖励周期持续时间（秒，必须大于 0）
      * @dev 只能在当前发奖周期完全结束后才能调用
      */
     function setRewardsDuration(uint256 _rewardsDuration) external;
 
     /**
-     * @notice 逃生舱：提取用户误打入的错误 ERC20 代币 (仅限 Owner 调用)
+     * @notice 逃生舱：提取用户误打入的错误 ERC20 代币 (仅限 Admin 调用)
      * @param tokenAddress 错误代币的地址
      * @param tokenAmount 提取的数量
      * @dev 严格禁止提取质押代币 (Staking Token) 以及尚未发放完的奖励代币

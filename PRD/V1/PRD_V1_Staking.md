@@ -32,7 +32,7 @@
 ### 2.2 奖励注入与延期平滑机制 (Reward Notification & Smoothing)
 为防止“巨鲸（大资金）”在运营团队注入奖励的前一秒冲入池子抢夺高额奖励，随后立刻撤资（即“三明治抢矿攻击”），系统设计了**奖励周期展期机制**：
 - 运营团队需先向质押合约授权 (`Approve`) 额度，随后调用 `notifyRewardAmount(uint256 reward)` 注入新的资金 `R_new`。
-- **强制内部划转**：合约内部首行逻辑必须通过 `SafeERC20.safeTransferFrom(msg.sender, address(this), reward)` 将代币从调用者钱包原子化扣除。严禁“先手动转账，再调用 notify 进行余额差值校验”的非原子化设计，以避免资金被恶意干扰或管理员误操作导致资金滞留。
+- **强制内部划转**：通过本函数原子化 `SafeERC20.safeTransferFrom(msg.sender, address(this), reward)` 注入奖励，禁止手动转账后 notify。严禁“先手动转账，再调用 notify 进行余额差值校验”的非原子化设计，以避免资金被恶意干扰或管理员误操作导致资金滞留，同时也避免实现时牺牲 Checks-Effects-Interactions 规范或漏掉旧周期收益结算。
 - **如果当前奖励周期已结束**：新的奖励速率 `RewardRate = R_new / RewardsDuration`。
 - **如果当前奖励周期未结束（还有剩余未发放奖励 `R_left`）**：
   - 合约会将剩余未发放的 `R_left` 与新注入的 `R_new` 合并。
@@ -64,7 +64,7 @@
 1. **结算 (UpdateReward)**：**前置触发**，更新用户的可领收益总额。
 2. **清零**：将用户内部账本中的 `rewards[account]` 余额清零（防重入攻击的核心步骤）。
 3. **发放 (Transfer)**：将奖励代币打入用户钱包。
-*(注：为提升体验，提供 `exit()` 一键退出功能，即依次执行全额 `withdraw` 和 `getReward`)*
+*(注：为提升体验，提供 `exit()` 一键退出功能。注意：`exit()` 必须在用户本金 `balance > 0` 时才调用内部 `withdraw`，否则仅执行 `getReward`，避免因 `withdraw(0)` 触发零值校验而导致 `exit` 失败。此规则在合约暂停态下同样适用。)*
 
 ---
 
@@ -154,7 +154,7 @@ $$\text{LPPrice} = \frac{(\text{ReserveA} \times \text{PriceA}) + (\text{Reserve
 #### 6.2.3 零值与异常展示处理
 - **`totalSupply == 0` 降级**：当池子刚建立尚无资金进入时，分母为 0。前端在检测到此状态时，**必须拦截计算以避免 `Infinity` 或 `NaN` 报错**，UI 界面统一优雅降级显示为 **`--`**（或由运营配置的一个固定“初始预期 APR”），等待首笔资金进入。
 
-### 6.2 链上事件追踪 (Events)
+### 6.3 链上事件追踪 (Events)
 必须抛出完整的日志事件，以供 The Graph 或后端索引器统计分析：
 - `Staked(address indexed user, uint256 amount)`
 - `Withdrawn(address indexed user, uint256 amount)`

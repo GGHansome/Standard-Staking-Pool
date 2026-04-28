@@ -148,7 +148,7 @@ $$APR = \frac{(rewardRate \times 31536000 \times \text{RewardTokenUSDPrice})}{\t
 
 #### 6.2.2 质押 LP Token 的特殊价格计算
 如果 V1 池指定的 `Staking Token` 是 DEX（如 Uniswap V2/V3、PancakeSwap）的流动性凭证 LP Token，前端无法直接从 CoinGecko 查到该 LP 的现价，必须通过公式推导 LP 价格：
-$$\text{LP\_Price} = \frac{(\text{ReserveA} \times \text{PriceA}) + (\text{ReserveB} \times \text{PriceB})}{\text{LP\_TotalSupply}}$$
+$$\text{LPPrice} = \frac{(\text{ReserveA} \times \text{PriceA}) + (\text{ReserveB} \times \text{PriceB})}{\text{LPTotalSupply}}$$
 *(注：前端需额外请求该 DEX 的 Factory/Pair 合约，获取底层池子中代币 A 和代币 B 的总储备量 `ReserveA` 和 `ReserveB`，以及该 LP 的总发行量 `LP_TotalSupply`。)*
 
 #### 6.2.3 零值与异常展示处理

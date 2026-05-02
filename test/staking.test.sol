@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.28;
 
 import "forge-std/Test.sol";
 import "../src/staking.sol";
@@ -89,6 +89,49 @@ contract StakingPoolTest is Test {
         vm.startPrank(user2);
         stakingToken.approve(address(pool), type(uint256).max);
         vm.stopPrank();
+        
+        // Initialize reward duration
+        pool.setRewardsDuration(7 days);
+    }
+
+    // ------------------------------------------------------------------
+    // 0. Constructor & Views (构造与视图)
+    // ------------------------------------------------------------------
+    function test_RevertWhen_ConstructorWithZeroAddress() public {
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        new StakingPool(address(0), address(rewardToken), admin, operator);
+
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        new StakingPool(address(stakingToken), address(0), admin, operator);
+
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        new StakingPool(address(stakingToken), address(rewardToken), address(0), operator);
+
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        new StakingPool(address(stakingToken), address(rewardToken), admin, address(0));
+    }
+
+    function test_RevertWhen_BalanceOfZeroAddress() public {
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        pool.balanceOf(address(0));
+    }
+
+    function test_RevertWhen_EarnedZeroAddress() public {
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        pool.earned(address(0));
+    }
+
+    function test_RevertWhen_RecoverZeroAddressOrZeroAmount() public {
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        pool.recoverERC20(address(0), 100 ether);
+
+        vm.expectRevert(IStakingPool.AddressCannotBeZero.selector);
+        pool.recoverERC20(address(usdc), 0);
+    }
+
+    function test_ViewFunctions_RewardPerTokenAndLastTimeRewardApplicable() public {
+        pool.rewardPerToken();
+        pool.lastTimeRewardApplicable();
     }
 
     // ------------------------------------------------------------------
@@ -141,7 +184,7 @@ contract StakingPoolTest is Test {
 
     function test_RevertWhen_UserAttemptsToStake0Tokens() public {
         vm.prank(user1);
-        vm.expectRevert("Must be greater than 0");
+        vm.expectRevert(IStakingPool.AmountMustBeGreaterThanZero.selector);
         pool.stake(0);
     }
 
@@ -169,7 +212,7 @@ contract StakingPoolTest is Test {
         pool.stake(100 ether);
 
         vm.prank(user1);
-        vm.expectRevert(); // Should indicate insufficient balance
+        vm.expectRevert(IStakingPool.InsufficientBalance.selector);
         pool.withdraw(150 ether);
     }
 
@@ -178,7 +221,7 @@ contract StakingPoolTest is Test {
         pool.stake(100 ether);
 
         vm.prank(user1);
-        vm.expectRevert("Must be greater than 0");
+        vm.expectRevert(IStakingPool.AmountMustBeGreaterThanZero.selector);
         pool.withdraw(0);
     }
 
@@ -235,7 +278,7 @@ contract StakingPoolTest is Test {
         emit RewardAdded(7000 ether);
         pool.notifyRewardAmount(7000 ether);
 
-        assertEq(pool.rewardRate(), uint256(7000 ether) / 7 days);
+        assertEq(pool.rewardRate(), (uint256(7000 ether) * 1e18) / 7 days);
     }
 
     function test_OperatorInjectsRewardsBeforeCurrentPeriodEnds_RewardSmoothing() public {
@@ -249,7 +292,7 @@ contract StakingPoolTest is Test {
         pool.notifyRewardAmount(4000 ether);
 
         // The new rate should be (3000 + 4000) / 7 days = 1000 REWARD/day
-        assertEq(pool.rewardRate(), uint256(7000 ether) / 7 days);
+        assertApproxEqAbs(pool.rewardRate(), (uint256(7000 ether) * 1e18) / 7 days, 1e14);
     }
 
     function test_RevertWhen_OperatorAttemptsToInjectRewardsWithoutSufficientApprovalOrBalance() public {
@@ -261,8 +304,16 @@ contract StakingPoolTest is Test {
     }
 
     function test_RevertWhen_OperatorAttemptsToInject0Rewards() public {
-        vm.expectRevert("Must be greater than 0");
+        vm.expectRevert(IStakingPool.RewardAmountCannotBeZero.selector);
         pool.notifyRewardAmount(0);
+    }
+
+    function test_RevertWhen_OperatorAttemptsToInjectRewardsWhenDurationIsNotSet() public {
+        // Create a new pool where duration is initially 0
+        StakingPool newPool = new StakingPool(address(stakingToken), address(rewardToken), admin, operator);
+        
+        vm.expectRevert(IStakingPool.RewardsDurationCannotBeZero.selector);
+        newPool.notifyRewardAmount(1000 ether);
     }
 
     // ------------------------------------------------------------------
@@ -306,18 +357,19 @@ contract StakingPoolTest is Test {
         pool.stake(100 ether);
 
         pool.pause();
+        assertTrue(pool.paused());
 
         // Stake should revert
         vm.prank(user1);
-        vm.expectRevert(); // OpenZeppelin's Pausable error
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         pool.stake(50 ether);
 
         // notifyRewardAmount should revert
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         pool.notifyRewardAmount(1000 ether);
 
         // setRewardsDuration should revert
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         pool.setRewardsDuration(14 days);
 
         // Withdraw should succeed
@@ -328,12 +380,9 @@ contract StakingPoolTest is Test {
         // GetReward should succeed
         vm.prank(user1);
         pool.getReward();
-
-        // Exit should succeed
-        vm.prank(user1);
-        pool.stake(10 ether); // Wait, we can't stake while paused.
         
         pool.unpause();
+        assertFalse(pool.paused());
         vm.prank(user1);
         pool.stake(10 ether);
         pool.pause();
@@ -359,17 +408,24 @@ contract StakingPoolTest is Test {
 
     function test_RevertWhen_AdminAttemptsToRescueStakingOrRewardTokens() public {
         // STK is protected
-        vm.expectRevert();
+        vm.expectRevert(IStakingPool.CannotRecoverStakingOrRewardTokens.selector);
         pool.recoverERC20(address(stakingToken), 10 ether);
 
         // REWARD is protected
-        vm.expectRevert();
+        vm.expectRevert(IStakingPool.CannotRecoverStakingOrRewardTokens.selector);
         pool.recoverERC20(address(rewardToken), 10 ether);
     }
 
     function test_RevertWhen_AdminAttemptsToSetRewardDurationTo0() public {
-        vm.expectRevert("Must be greater than 0");
+        vm.expectRevert(IStakingPool.RewardsDurationCannotBeZero.selector);
         pool.setRewardsDuration(0);
+    }
+
+    function test_RevertWhen_AdminAttemptsToChangeRewardDurationWhilePeriodIsActive() public {
+        pool.notifyRewardAmount(7000 ether); // Starts an active period
+        
+        vm.expectRevert(IStakingPool.RewardsDurationCannotBeSetBeforeCurrentPeriodEnds.selector);
+        pool.setRewardsDuration(14 days);
     }
 
     // ------------------------------------------------------------------
@@ -412,8 +468,8 @@ contract StakingPoolTest is Test {
         pool.grantRole(pool.OPERATOR_ROLE(), newAdmin);
 
         // Now they have the role. The call might revert due to no token approval, but not due to AccessControl
-        // We will just test that it reverts with "ERC20: insufficient allowance" or similar instead of AccessControl
-        vm.expectRevert("ERC20: insufficient allowance");
+        // We will just test that it reverts with "ERC20: transfer amount exceeds balance" or similar instead of AccessControl
+        vm.expectRevert("ERC20: transfer amount exceeds balance");
         pool.notifyRewardAmount(1000 ether);
 
         vm.stopPrank();

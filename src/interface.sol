@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -16,7 +16,15 @@ interface IStakingPool is IAccessControl {
     event RewardPaid(address indexed user, uint256 reward);
     event RewardAdded(uint256 reward);
     event RewardsDurationUpdated(uint256 newDuration);
-    event Recovered(address token, uint256 amount);
+    event Recovered(address indexed token, uint256 amount);
+
+    error AmountMustBeGreaterThanZero();
+    error AddressCannotBeZero();
+    error RewardsDurationCannotBeZero();
+    error RewardAmountCannotBeZero();
+    error InsufficientBalance();
+    error CannotRecoverStakingOrRewardTokens();
+    error RewardsDurationCannotBeSetBeforeCurrentPeriodEnds();
 
     /* ============ 视图函数 (View Functions) ============ */
 
@@ -64,6 +72,7 @@ interface IStakingPool is IAccessControl {
 
     /**
      * @notice 奖励发放速率（每秒释放的奖励代币数量）
+     * @dev 该值已被放大 1e18 倍以防止精度丢失。前端在计算真实的每秒奖励数 (Wei) 时，需将此值除以 1e18。
      */
     function rewardRate() external view returns (uint256);
 
@@ -80,6 +89,7 @@ interface IStakingPool is IAccessControl {
 
     /**
      * @notice 每单位质押代币的累计奖励
+     * @dev 该值已被放大 1e18 倍以防止精度丢失。前端在使用该值时，请注意它包含了额外的 1e18 精度缩放。
      */
     function rewardPerToken() external view returns (uint256);
 

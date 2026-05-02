@@ -111,6 +111,12 @@ Feature: V1 Standard Dual-Token Staking Pool
     Then the transaction should revert
     And the error message should indicate "Must be greater than 0"
 
+  Scenario: Operator attempts to inject rewards when duration is not set
+    Given a new Staking Pool is deployed where the reward duration is not yet initialized
+    When the operator attempts to call "notifyRewardAmount" with 1000 REWARD
+    Then the transaction should revert
+    And the error message should indicate that duration cannot be zero
+
   # ------------------------------------------------------------------
   # 6. Reward Leakage (空窗期奖励归属)
   # ------------------------------------------------------------------
@@ -150,6 +156,12 @@ Feature: V1 Standard Dual-Token Staking Pool
     When the admin attempts to call "setRewardsDuration" with 0
     Then the transaction should revert
     And the error message should indicate "Must be greater than 0"
+
+  Scenario: Admin attempts to change reward duration while a period is active
+    Given a reward period is currently active
+    When the admin attempts to call "setRewardsDuration" with a new duration
+    Then the transaction should revert
+    And the error message should indicate that the duration cannot be changed before the current period ends
 
   # ------------------------------------------------------------------
   # 8. Access Control & Roles (权限控制)

@@ -1,0 +1,14 @@
+{
+  "name": "standard-staking-pool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "frontend:dev": "pnpm --filter frontend dev",
+    "frontend:build": "pnpm --filter frontend build",
+    "frontend:lint": "pnpm --filter frontend lint",
+    "contracts:build": "cd contract && forge build",
+    "contracts:fmt": "cd contract && forge fmt",
+    "contracts:test": "cd contract && forge test"
+  },
+  "packageManager": "pnpm@10.23.0"
+}

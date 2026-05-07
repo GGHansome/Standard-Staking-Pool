@@ -23,7 +23,7 @@
 ### 2.1 动态收益计算模型 (The Water-Level Model)
 收益计算不采用固定利率，而是采用**动态份额瓜分机制**：
 - **全局变量定义**：
-  - `RewardRate` (奖励发放速率)：每秒向整个奖池释放的代币数量。
+  - `RewardRate` (奖励发放速率)：每秒向整个奖池释放的奖励代币数量，链上存储值会放大 $10^{18}$ 倍，即 `scaledRewardRate = actualRewardRatePerSecond * 1e18`，以降低低精度代币、小额奖励、长周期发放场景下的整数截断损失。
   - `RewardsDuration` (奖励周期)：单次注入奖励的持续时间（例如 7 天 = 604800 秒）。
   - `TotalSupply` (总锁仓量)：当前资金池内的所有质押代币总和。
 - **收益分配逻辑**：每秒释放的奖励由全体质押者按其**当前质押量占总锁仓量的比例**进行分配。
@@ -33,10 +33,10 @@
 为防止“巨鲸（大资金）”在运营团队注入奖励的前一秒冲入池子抢夺高额奖励，随后立刻撤资（即“三明治抢矿攻击”），系统设计了**奖励周期展期机制**：
 - 运营团队需先向质押合约授权 (`Approve`) 额度，随后调用 `notifyRewardAmount(uint256 reward)` 注入新的资金 `R_new`。
 - **强制内部划转**：通过本函数原子化 `SafeERC20.safeTransferFrom(msg.sender, address(this), reward)` 注入奖励，禁止手动转账后 notify。严禁“先手动转账，再调用 notify 进行余额差值校验”的非原子化设计，以避免资金被恶意干扰或管理员误操作导致资金滞留，同时也避免实现时牺牲 Checks-Effects-Interactions 规范或漏掉旧周期收益结算。
-- **如果当前奖励周期已结束**：新的奖励速率 `RewardRate = R_new / RewardsDuration`。
+- **如果当前奖励周期已结束**：新的奖励速率 `RewardRate = R_new * 1e18 / RewardsDuration`。该值是链上放大后的速率，真实每秒释放量为 `RewardRate / 1e18`。
 - **如果当前奖励周期未结束（还有剩余未发放奖励 `R_left`）**：
   - 合约会将剩余未发放的 `R_left` 与新注入的 `R_new` 合并。
-  - 新的奖励速率 `RewardRate = (R_left + R_new) / RewardsDuration`。
+  - 新的奖励速率 `RewardRate = (R_left + R_new) * 1e18 / RewardsDuration`。其中 `R_left` 是根据上一轮放大后的 `RewardRate` 折算回来的真实剩余奖励数量。
   - **核心效果**：这会将新老奖励混合，并在一个新的完整周期（如 7 天）内重新平滑释放，使得短线投机资金无法瞬间榨干红利。
 
 ### 2.3 空窗期奖励归属 (Reward Leakage)
@@ -94,8 +94,8 @@ V1 阶段由于不涉及复杂的 DAO 投票，权限采用简化的多角色模
 
 ### 4.3 零值操作限制 (Zero-Value Validation)
 为防止无意义的日志事件污染、Gas 空耗以及除以零漏洞，系统对核心状态变更操作进行严格的前置阻断：
-- **操作对象**：`stake(amount)`, `withdraw(amount)`, `notifyRewardAmount(reward)`, `setRewardsDuration(duration)`。
-- **强制约束**：以上所有函数的首行必须包含 `require(value > 0, "Must be greater than 0")`，若输入参数为 0 则直接 Revert 交易。不允许用 0 值来强行触发前置结算（若用户只希望结算奖励而不变更本金，应显式调用无参的 `getReward()` 方法）。
+- **操作对象**：`stake(amount)`, `withdraw(amount)`, `notifyRewardAmount(reward)`, `setRewardsDuration(duration)`, `recoverERC20(tokenAddress, tokenAmount)`。
+- **错误类型语义**：地址为零时必须使用 `AddressCannotBeZero()`；数量为零时必须使用 `AmountMustBeGreaterThanZero()` 或对应业务零值错误，避免 `recoverERC20(tokenAmount == 0)` 等场景返回不准确的地址错误。
 
 ---
 
@@ -118,7 +118,9 @@ V1 阶段由于不涉及复杂的 DAO 投票，权限采用简化的多角色模
 
 ### 5.3 防范假充值与恶意代币
 - **业务场景**：针对部分非标准的 ERC20 代币（例如转账时不返回布尔值，或者有转账抽水/通缩机制的代币）。
-- **应对策略**：所有代币交互强制包裹 OpenZeppelin 的 `SafeERC20` 库。本期 V1 不支持自带通缩机制（Fee-on-transfer）的代币，若未来需要支持，需在 PRD V2 中增加通过计算转账前后余额差值（Balance Delta）来确认实际到账金额的逻辑。
+- **应对策略**：所有代币交互强制包裹 OpenZeppelin 的 `SafeERC20` 库。本期 V1 仅支持标准 ERC20 余额语义，不支持自带通缩机制（Fee-on-transfer）、rebasing、黑名单/冻结、回调型或其他会改变实际到账/实际支付语义的代币。
+- **部署/配置层约束**：池子部署或前端配置时，`stakingToken` 与 `rewardToken` 必须被标记为标准 ERC20。若目标代币存在 fee-on-transfer 等非标准行为，V1 不允许创建或配置该池。
+- **合约层兜底**：`stake()` 与 `notifyRewardAmount()` 必须通过转账前后余额差校验实际到账数量，若实际到账数量与用户传入数量不一致，必须 revert `FeeOnTransferNotSupported()`。V1 不做 `actual received` 记账，也不做 fee-on-transfer 的偿付能力适配。
 
 ---
 
@@ -130,7 +132,7 @@ V1 阶段由于不涉及复杂的 DAO 投票，权限采用简化的多角色模
 1. `stakingToken()`：获取质押代币的合约地址，用于前端读取代币精度和符号。
 2. `rewardToken()`：获取奖励代币的合约地址，用于前端读取代币精度和符号。
 3. `totalSupply()`：用于计算当前矿池的总 TVL。
-4. `rewardRate()`：用于前端实时计算并展示当前的全局 APR。
+4. `rewardRate()`：用于前端实时计算并展示当前的全局 APR。注意该返回值已放大 $10^{18}$ 倍，前端计算真实每秒奖励数量时必须先除以 `1e18`。
 5. `earned(address)`：用于在用户仪表盘实时跳动展示“未领取收益”的数字。
 6. `balanceOf(address)`：用于展示“我的质押金额”。
 7. `periodFinish()`：当前奖励周期的结束时间戳，前端可用于展示发奖倒计时。
@@ -142,9 +144,9 @@ V1 阶段由于不涉及复杂的 DAO 投票，权限采用简化的多角色模
 
 #### 6.2.1 标准异币挖矿 APR 公式
 当质押代币与奖励代币不同且市值不同时，必须引入 USD 价格进行换算，公式如下：
-$$APR = \frac{(rewardRate \times 31536000 \times \text{RewardTokenUSDPrice})}{\text{totalSupply} \times \text{StakingTokenUSDPrice}} \times 100\%$$
+$$APR = \frac{((rewardRate / 10^{18}) \times 31536000 \times \text{RewardTokenUSDPrice})}{\text{totalSupply} \times \text{StakingTokenUSDPrice}} \times 100\%$$
 - **价格数据源**：前端统一通过调用 **CoinGecko API** 获取实时的 `StakingTokenUSDPrice` 和 `RewardTokenUSDPrice`。
-- **精度对齐 (Decimals)**：在代入公式计算前，前端必须先根据各自代币的 `decimals()` 将链上读取的原始 `rewardRate` 和 `totalSupply` 转换为人类可读数量（例如将 $10^{18}$ wei 转换为 1 ETH）。
+- **精度对齐 (Decimals)**：在代入公式计算前，前端必须先将链上读取的 `rewardRate` 除以 `1e18` 得到真实每秒奖励最小单位数量，再根据奖励代币的 `decimals()` 转换为人类可读数量；`totalSupply` 也必须根据质押代币的 `decimals()` 转换为人类可读数量（例如将 $10^{18}$ wei 转换为 1 ETH）。
 
 #### 6.2.2 质押 LP Token 的特殊价格计算
 如果 V1 池指定的 `Staking Token` 是 DEX（如 Uniswap V2/V3、PancakeSwap）的流动性凭证 LP Token，前端无法直接从 CoinGecko 查到该 LP 的现价，必须通过公式推导 LP 价格：
@@ -160,3 +162,14 @@ $$\text{LPPrice} = \frac{(\text{ReserveA} \times \text{PriceA}) + (\text{Reserve
 - `Withdrawn(address indexed user, uint256 amount)`
 - `RewardPaid(address indexed user, uint256 reward)`
 - `RewardAdded(uint256 reward)`
+- `RewardsDurationUpdated(uint256 newDuration)`
+- `Recovered(address indexed token, uint256 amount)`
+- `RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)`：继承自 OpenZeppelin `AccessControl`，用于追踪 Admin/Operator 授权。
+- `RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)`：继承自 OpenZeppelin `AccessControl`，用于追踪 Admin/Operator 移除。
+- `RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)`：继承自 OpenZeppelin `AccessControl`，用于追踪角色管理员关系变更。
+- `Paused(address account)`：继承自 OpenZeppelin `Pausable`，用于追踪紧急暂停。
+- `Unpaused(address account)`：继承自 OpenZeppelin `Pausable`，用于追踪解除暂停。
+
+索引器不得只监听业务自定义事件。由于合约实际继承 `AccessControl` 与 `Pausable`，权限与暂停状态变化也属于 V1 的集成依赖，前端和后端索引服务必须一并接入。
+
+---

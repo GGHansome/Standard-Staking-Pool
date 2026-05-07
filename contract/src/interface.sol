@@ -5,26 +5,65 @@ import "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /**
  * @title IStakingPool
- * @dev V1 标准双币质押收益池接口 (Standard Dual-Token Staking Pool)
- * 采用无锁仓随存随取模型（Flexible Staking），依托水位线模型进行奖励分发。
+ * @notice V1 标准双币质押收益池接口。
+ * @dev 采用无锁仓随存随取模型（Flexible Staking），依托水位线模型进行奖励分发。
+ *      实现继承 OpenZeppelin AccessControl，因此还会产生 RoleGranted、RoleRevoked、
+ *      RoleAdminChanged 事件；实现继承 Pausable，因此还会产生 Paused、Unpaused 事件。
  */
 interface IStakingPool is IAccessControl {
     /* ============ 事件 (Events) ============ */
 
+    /// @notice 用户质押本金入池。
+    /// @param user 执行质押的钱包地址。
+    /// @param amount 记入用户本金账本的质押数量。
     event Staked(address indexed user, uint256 amount);
+
+    /// @notice 用户提取质押本金。
+    /// @param user 执行提现的钱包地址。
+    /// @param amount 从用户本金账本扣减并转出的数量。
     event Withdrawn(address indexed user, uint256 amount);
+
+    /// @notice 用户领取已结算奖励。
+    /// @param user 领取奖励的钱包地址。
+    /// @param reward 实际发放的奖励数量。
     event RewardPaid(address indexed user, uint256 reward);
+
+    /// @notice Operator 注入新奖励并开启或刷新奖励周期。
+    /// @param reward 本次注入并纳入发放计划的奖励数量。
     event RewardAdded(uint256 reward);
+
+    /// @notice Admin 更新奖励周期长度。
+    /// @param newDuration 新的奖励周期持续时间，单位为秒。
     event RewardsDurationUpdated(uint256 newDuration);
+
+    /// @notice Admin 救援误转入的非核心 ERC20。
+    /// @param token 被救援的 ERC20 地址。
+    /// @param amount 救援转出的数量。
     event Recovered(address indexed token, uint256 amount);
 
+    /// @notice 入参数量为 0。
     error AmountMustBeGreaterThanZero();
+
+    /// @notice 入参地址为零地址。
     error AddressCannotBeZero();
+
+    /// @notice 尚未设置奖励周期或奖励周期被设置为 0。
     error RewardsDurationCannotBeZero();
+
+    /// @notice 注入奖励数量为 0。
     error RewardAmountCannotBeZero();
+
+    /// @notice 用户本金余额不足以完成提现。
     error InsufficientBalance();
+
+    /// @notice 禁止通过 recoverERC20 提取质押代币或奖励代币。
     error CannotRecoverStakingOrRewardTokens();
+
+    /// @notice 当前奖励周期尚未结束，不能修改奖励周期长度。
     error RewardsDurationCannotBeSetBeforeCurrentPeriodEnds();
+
+    /// @notice V1 不支持 fee-on-transfer 等实际到账数量与传入数量不一致的代币。
+    error FeeOnTransferNotSupported();
 
     /* ============ 视图函数 (View Functions) ============ */
 
@@ -103,17 +142,20 @@ interface IStakingPool is IAccessControl {
     /**
      * @notice 质押代币入池
      * @param amount 质押数量 (必须大于 0)
+     * @dev V1 仅支持标准 ERC20。若实际到账数量与 amount 不一致，将 revert FeeOnTransferNotSupported。
      */
     function stake(uint256 amount) external;
 
     /**
      * @notice 提取本金出池
      * @param amount 提取数量 (必须大于 0)
+     * @dev 提现不受暂停状态限制，以保证用户最后撤离权。
      */
     function withdraw(uint256 amount) external;
 
     /**
      * @notice 领取已累积的奖励代币
+     * @dev 领取不受暂停状态限制；若当前无奖励则直接返回，不触发事件。
      */
     function getReward() external;
 
@@ -127,17 +169,20 @@ interface IStakingPool is IAccessControl {
 
     /**
      * @notice 触发紧急暂停 (仅限 Admin 调用)
+     * @dev 触发 OpenZeppelin Paused 事件。
      */
     function pause() external;
 
     /**
      * @notice 解除紧急暂停 (仅限 Admin 调用)
+     * @dev 触发 OpenZeppelin Unpaused 事件。
      */
     function unpause() external;
 
     /**
      * @notice 注入新的奖励并触发新的发奖周期 (仅限 Operator 调用)
      * @param reward 注入的奖励代币数量 (必须大于 0)
+     * @dev V1 仅支持标准 ERC20。若实际到账数量与 reward 不一致，将 revert FeeOnTransferNotSupported。
      */
     function notifyRewardAmount(uint256 reward) external;
 
@@ -152,7 +197,8 @@ interface IStakingPool is IAccessControl {
      * @notice 逃生舱：提取用户误打入的错误 ERC20 代币 (仅限 Admin 调用)
      * @param tokenAddress 错误代币的地址
      * @param tokenAmount 提取的数量
-     * @dev 严格禁止提取质押代币 (Staking Token) 以及尚未发放完的奖励代币
+     * @dev 严格禁止提取质押代币 (Staking Token) 和奖励代币 (Reward Token)；
+     *      暂停状态下仍可调用，便于应急救援误转资产。
      */
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external;
 }

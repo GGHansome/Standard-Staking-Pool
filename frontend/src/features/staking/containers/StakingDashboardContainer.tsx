@@ -26,14 +26,10 @@ function readPoolAddress(): Address | undefined {
   return appConfig.stakingPoolAddress
 }
 
-function fetchTokenPrices() {
-  const stakingId = appConfig.stakingTokenCoingeckoId
-  const rewardId = appConfig.rewardTokenCoingeckoId
-
+function fetchTokenPrices(ids: string[]) {
   return async (): Promise<CoingeckoPrices> => {
-    const ids = [stakingId, rewardId].join(',')
     const response = await fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+      `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd`,
     )
 
     if (!response.ok) {
@@ -42,6 +38,10 @@ function fetchTokenPrices() {
 
     return (await response.json()) as CoingeckoPrices
   }
+}
+
+function resolveTokenUsdPrice(localPrice: number | undefined, coingeckoId: string, prices?: CoingeckoPrices) {
+  return localPrice ?? prices?.[coingeckoId]?.usd
 }
 
 export function StakingDashboardContainer() {
@@ -157,20 +157,31 @@ export function StakingDashboardContainer() {
     },
   })
 
+  const coingeckoPriceIds = [
+    appConfig.stakingTokenUsdPrice === undefined ? appConfig.stakingTokenCoingeckoId : '',
+    appConfig.rewardTokenUsdPrice === undefined ? appConfig.rewardTokenCoingeckoId : '',
+  ].filter(Boolean)
+
   const priceQuery = useQuery({
-    queryKey: [
-      'coingecko-prices',
-      appConfig.stakingTokenCoingeckoId,
-      appConfig.rewardTokenCoingeckoId,
-    ],
-    enabled: Boolean(appConfig.stakingTokenCoingeckoId && appConfig.rewardTokenCoingeckoId),
+    queryKey: ['coingecko-prices', coingeckoPriceIds],
+    enabled: coingeckoPriceIds.length > 0,
     staleTime: 60_000,
     refetchInterval: 60_000,
-    queryFn: fetchTokenPrices(),
+    queryFn: fetchTokenPrices(coingeckoPriceIds),
   })
 
   const stakingDecimals = readAt<number>(tokenRead.data, 1, 18)
   const rewardDecimals = readAt<number>(tokenRead.data, 5, 18)
+  const stakingUsdPrice = resolveTokenUsdPrice(
+    appConfig.stakingTokenUsdPrice,
+    appConfig.stakingTokenCoingeckoId,
+    priceQuery.data,
+  )
+  const rewardUsdPrice = resolveTokenUsdPrice(
+    appConfig.rewardTokenUsdPrice,
+    appConfig.rewardTokenCoingeckoId,
+    priceQuery.data,
+  )
 
   const rewardPerSecond = useMemo(() => {
     const value = Number(rewardRate) / 10 ** (rewardDecimals + REWARD_RATE_PRECISION)
@@ -178,16 +189,17 @@ export function StakingDashboardContainer() {
   }, [rewardDecimals, rewardRate])
 
   const apr = useMemo(() => {
-    const stakingPrice = priceQuery.data?.[appConfig.stakingTokenCoingeckoId]?.usd
-    const rewardPrice = priceQuery.data?.[appConfig.rewardTokenCoingeckoId]?.usd
     const totalSupplyReadable = Number(totalSupply) / 10 ** stakingDecimals
 
-    if (!rewardPerSecond || !stakingPrice || !rewardPrice || totalSupplyReadable <= 0) {
+    if (!rewardPerSecond || !stakingUsdPrice || !rewardUsdPrice || totalSupplyReadable <= 0) {
       return undefined
     }
 
-    return ((rewardPerSecond * SECONDS_PER_YEAR * rewardPrice) / (totalSupplyReadable * stakingPrice)) * 100
-  }, [priceQuery.data, rewardPerSecond, stakingDecimals, totalSupply])
+    return (
+      ((rewardPerSecond * SECONDS_PER_YEAR * rewardUsdPrice) / (totalSupplyReadable * stakingUsdPrice)) *
+      100
+    )
+  }, [rewardPerSecond, rewardUsdPrice, stakingDecimals, stakingUsdPrice, totalSupply])
 
   const stakingToken: TokenView = {
     address: stakingTokenAddress,
@@ -195,7 +207,7 @@ export function StakingDashboardContainer() {
     decimals: stakingDecimals,
     balance: readAt<bigint>(tokenRead.data, 2, 0n),
     allowance: readAt<bigint>(tokenRead.data, 3, 0n),
-    usdPrice: priceQuery.data?.[appConfig.stakingTokenCoingeckoId]?.usd,
+    usdPrice: stakingUsdPrice,
   }
 
   const rewardToken: TokenView = {
@@ -204,7 +216,7 @@ export function StakingDashboardContainer() {
     decimals: rewardDecimals,
     balance: readAt<bigint>(tokenRead.data, 6, 0n),
     allowance: readAt<bigint>(tokenRead.data, 7, 0n),
-    usdPrice: priceQuery.data?.[appConfig.rewardTokenCoingeckoId]?.usd,
+    usdPrice: rewardUsdPrice,
   }
 
   const pool: PoolView = {

@@ -18,11 +18,18 @@ function readAddress(key: string): Address | undefined {
   return isAddress(value) ? value : undefined
 }
 
+function readPositiveNumber(key: string): number | undefined {
+  const value = Number(readString(key))
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 export const appConfig = {
   chainId: readChainId(),
   chainName: readString('VITE_CHAIN_NAME') || DEFAULT_CHAIN_NAME,
   rpcUrl: readString('VITE_RPC_URL') || DEFAULT_RPC_URL,
   stakingPoolAddress: readAddress('VITE_STAKING_POOL_ADDRESS'),
+  stakingTokenUsdPrice: readPositiveNumber('VITE_STAKING_TOKEN_USD_PRICE'),
+  rewardTokenUsdPrice: readPositiveNumber('VITE_REWARD_TOKEN_USD_PRICE'),
   stakingTokenCoingeckoId: readString('VITE_STAKING_TOKEN_COINGECKO_ID'),
   rewardTokenCoingeckoId: readString('VITE_REWARD_TOKEN_COINGECKO_ID'),
 }

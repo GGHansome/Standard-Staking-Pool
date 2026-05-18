@@ -188,6 +188,10 @@ contract StakingPool is IStakingPool, AccessControl, Pausable, ReentrancyGuard {
     function withdraw(
         uint256 amount
     ) public override nonReentrant updateReward(msg.sender) {
+        _withdraw(amount);
+    }
+
+    function _withdraw(uint256 amount) internal {
         // TODO: implement
         if (amount == 0) {
             revert AmountMustBeGreaterThanZero();
@@ -203,6 +207,10 @@ contract StakingPool is IStakingPool, AccessControl, Pausable, ReentrancyGuard {
 
     /// @inheritdoc IStakingPool
     function getReward() public override nonReentrant updateReward(msg.sender) {
+        _getReward();
+    }
+
+    function _getReward() internal {
         // TODO: implement
         uint256 reward = userInfo[msg.sender].rewards;
         if (reward == 0) {
@@ -214,12 +222,12 @@ contract StakingPool is IStakingPool, AccessControl, Pausable, ReentrancyGuard {
     }
 
     /// @inheritdoc IStakingPool
-    function exit() external override {
+    function exit() external override nonReentrant updateReward(msg.sender) {
         // TODO: implement
         if (userInfo[msg.sender].balance > 0) {
-            withdraw(userInfo[msg.sender].balance);
+            _withdraw(userInfo[msg.sender].balance);
         }
-        getReward();
+        _getReward();
     }
 
     /* ============ 管理员/运营操作 (Admin/Operator Functions) ============ */

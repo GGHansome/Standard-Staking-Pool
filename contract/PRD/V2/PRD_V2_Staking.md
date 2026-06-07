@@ -86,7 +86,7 @@ V2 继承 V1 的基础水位线模型。基础奖励由基础奖池按 `rewardRa
 2. **快照写入时机**：`rewardHistory` 只在会改变后续全局奖励曲线的入口写入或覆盖，包括 `stake`、`withdraw` / `withdrawMultiple`、`notifyRewardAmount`。`claimAll` 不改变 `totalSupply`、`rewardRate` 或 `periodFinish`，不得仅因结算奖励而写入快照。`notifyRewardAmount` 应先使用`updateReward`结算到当前区块，随后在新释放曲线生效后写入或覆盖 `time = block.timestamp` 的快照；该快照的 `rewardPerToken` 表示旧曲线截至该时刻结算后的水位线，`periodFinish` 表示从该时刻起向后生效的新奖励周期结束时间。
 3. **同区块压缩优化 (Same-block Compression)**：若最后一条快照的 `time == block.timestamp`，直接覆盖其 `rewardPerToken` 与 `periodFinish`，不新增数组长度。覆盖后记录应代表该区块最后一次状态变更后的奖励曲线。
 4. **到期切分触发时机**：`updateReward` 逐仓结算时，若仓位满足 `boostRate > 0 && !boostSettled && block.timestamp >= unlockTime`，则计算并缓存 `rewardPerTokenAtUnlock`，再将 `boostSettled` 置为 `true`。到期切分不改变全局奖励曲线，不应为此强制写入快照。
-5. **二分查找定位 (Binary Search)**：首次跨越到期点时，在 `rewardHistory` 中定位 `time <= unlockTime` 的最后一条快照 `cp1` 和右侧快照 `cp2`。若命中 `time == unlockTime`，直接返回该水位线；若不存在右侧真实快照，则使用本次结算到当前区块的虚拟当前节点作为 `cp2`，仅参与计算，不写入数组。
+5. **二分查找定位 (Binary Search)**：首次跨越到期点时，系统在 `rewardHistory` 中定位 `time <= unlockTime` 的最后一条快照 `cp1`，以及右侧快照 `cp2`。若命中 `time == unlockTime`，直接返回该水位线。若不存在右侧真实快照，说明从 `cp1` 到当前结算时刻之间没有新的真实曲线折点；此时使用虚拟当前节点作为 `cp2`，仅参与本次到期切分计算，不写入 `rewardHistory`。若当前入口本身会改变全局奖励曲线（如 `stake`、`withdraw / withdrawMultiple`、`notifyRewardAmount`），应在外层状态变更完成后按快照写入规则另行写入或覆盖真实快照；该真实快照的写入原因是全局曲线变化，而不是到期切分。
 6. **统一插值计算 (Clamped Linear Interpolation)**：相邻真实快照之间，`totalSupply` 与 `rewardRate` 不变，因此 `rewardPerToken` 线性增长。插值时按 `cp1.periodFinish` 截断时间，避免把奖励结束后的零释放区间摊入锁仓期。
    $$ effectiveUnlockTime = min(unlockTime, cp1.periodFinish) $$
    $$ effectiveCp2Time = min(cp2.time, cp1.periodFinish) $$

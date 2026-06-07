@@ -1,5 +1,26 @@
 # 修改日志 (Changelog)
 
+**2026-06-07**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **解耦 `rewardHistory` 写入与 `updateReward` 结算（对应章节：3.3、5.1、5.2、5.3、7.11）**：明确 `rewardHistory` 只在 `stake`、`withdraw` / `withdrawMultiple`、`notifyRewardAmount` 等会改变后续全局奖励曲线的真实折点写入或同区块覆盖，`claimAll` 不得仅因调用 `updateReward` 写入快照；锁仓到期切分若找不到右侧真实快照，应使用已结算到当前区块的虚拟当前节点参与插值，不落盘写入，从而减少高频领取和纯到期结算导致的快照增长。
+- **新增锁仓到期切分状态 `boostSettled`（对应章节：2.4、3.3、5.1、5.2、5.3、8.3）**：在 `DepositRecord` 中新增独立状态标记 `boostSettled`，用于表示仓位是否已经完成到期切分，明确不得用 `rewardPerTokenAtUnlock == 0` 推导切分状态。`updateReward` 仅在 `boostRate > 0 && !boostSettled && block.timestamp >= unlockTime` 时执行一次历史水位线二分查找并缓存 `rewardPerTokenAtUnlock`，随后置 `boostSettled = true`；后续结算、`claimAll`、`withdraw` 和视图展示统一基于 `boostSettled` 判断锁仓加速奖励是否已解锁可领，避免重复二分和状态语义歧义。
+- **澄清锁仓模块关闭入口与非法档位校验（对应章节：6.4）**：锁仓加速模块的唯一关闭方式调整为部署时传入空档位配置 `durations = []` 且 `boosts = []`；非空档位配置中任一 `duration > 0 && boostRate == 0` 均属于非法配置，必须在构造函数中 revert，避免“全 0 boost 关闭模块”和“锁仓档位必须有正 boost”之间产生冲突。
+
+**2026-06-06**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **明确支持同币池与异币池并补齐同币偿付边界（对应章节：1.3、2.3、4.1、4.5、7.8、7.9）**：将“单币质押与分红”调整为更准确的平台币 / 社区代币质押激励表述，并明确 V2 同时支持 `stakingToken != rewardToken` 的异币池和 `stakingToken == rewardToken` 的同币池。同币池下本金、基础奖励、补贴备付金和罚金处理中间余额可共用同一 ERC20 余额，但必须通过独立逻辑资金桶维护归属；`sweepSubsidy` 只能按 `maxSweepableSubsidy()` 的账本边界提取沉淀补贴，不能以合约总余额反推可提额度；同时补充同币池下核心资产救援限制、标准 ERC20 到账校验和 `recoverERC20` / `sweepSubsidy` 的安全模型区别。
+- **固化单活动池经济参数与仓位字段口径（对应章节：1.3、2.4、6.2、6.3、6.4、7.10、8.2、8.4）**：明确 V2 合约实例是“部署时可配置、运行期规则固定”的独立活动池；奖励周期、锁仓档位、推荐补贴与返佣比例、罚金率等经济参数必须通过构造函数一次性声明并在合约生命周期内不可修改。由于池级经济参数不再运行期变化，`DepositRecord` 不再保存 `penaltyRate`、`inviteeBoostRate` 和三级返佣比例快照，只保留与单笔仓位选择直接相关的 `boostRate` 以及独立水位线、未领奖励字段。
+- **新增有效基础奖励释放周期作为锁仓开放唯一判断（对应章节：2.2、4.3、5.1、7.5、7.6、8.3）**：定义 `isRewardPeriodActive()`，当且仅当 `rewardRate > 0 && block.timestamp < periodFinish` 时返回 `true`；新建锁仓仓位必须满足 `isRewardPeriodActive() == true`，活期仓位 `duration == 0` 不受该限制。首次基础奖励注入前、两次奖励周期之间的空窗期均只允许活期质押；历史锁仓仓位不受当前开放状态影响。锁仓期限允许超过剩余奖励周期，但前提是创建该仓位时处于有效基础奖励释放周期。
+- **明确空池奖励按 V1 逻辑自然流失（对应章节：4.1、4.3、4.4、4.5、7.6）**：`notifyRewardAmount` 注入基础奖励后立即启动释放周期，不等待首个有效仓位进入，也不采用空池暂停机制。奖励释放期间若 `totalSupply == 0`，`rewardPerToken` 不增长，空池期间基础奖励不得在后续首个质押者进入时补分配；该段基础奖励视为自然流失，并在全局水位线更新时同步释放其对应的最大理论补贴预算。
+- **同步固定配置后的管理员接口、暂停规则与事件规范（对应章节：6.4、7.7、8.2、8.3、8.4）**：管理员接口移除 `setRewardsDuration`、`setLockTiers`、`setReferralRates`、`setPenaltyRate` 等运行期经济参数修改入口，仅保留 `notifyRewardAmount`、`setTreasury`、`sweepSubsidy`、暂停和救援接口；暂停状态下阻断范围收敛为 `stake`、`notifyRewardAmount`、`sweepSubsidy`，`setTreasury` 仍可用于紧急修复。视图层新增 `isRewardPeriodActive()`，并明确 `getLockTiers()` 只表示配置档位、不表示当前锁仓开放状态；事件层新增 `ActivityConfigured`，移除运行期经济参数更新事件。
+
+**2026-06-04**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **修正懒结算模型下 `sweepSubsidy` 的偿付边界（对应章节：2.3、4.1、4.3、4.4、4.5、5.2、8.3、8.4）**：新增 `unsettledMaxSubsidyLiability` 作为未结算最大补贴负债，覆盖已释放但用户尚未触发 `updateReward` 的补贴缺口和未来尚未释放的潜在补贴；`maxSweepableSubsidy()` 改为按 `subsidyReserve - totalPendingSubsidy - unsettledMaxSubsidyLiability` 计算，避免 `remainingBaseReward()` 随时间下降导致管理员提前提走尚需偿付用户历史补贴的备付金；同步明确续期时只对本次新注入基础奖励新增未结算最大补贴预算，避免重复计提上一期 `leftoverBase`。
+
 **2026-06-01**
 
 **PRD/V2/PRD_V2_Staking.md**

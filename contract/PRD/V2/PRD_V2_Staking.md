@@ -140,7 +140,7 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 - **空窗预算释放**：若奖励周期运行期间 `totalSupply == 0`，该时间段对应的基础奖励按 V1 逻辑自然流失，不会形成任何用户基础奖励或额外补贴；合约在全局水位线更新时应按该段流失基础奖励对应的最大理论补贴预算扣减 `unsettledMaxSubsidyLiability`。
 - **补贴支付**：`claimAll` 支付自身推荐补贴、推荐返佣和已到期仓位的已解锁锁仓加速奖励，或 `withdraw` / `withdrawMultiple` 在关闭仓位前支付该仓位尚未领取的自身推荐补贴、到期锁仓加速奖励时，`totalPendingSubsidy` 与 `subsidyReserve` 必须按实际支付的补贴金额等额减少。
 - **补贴作废**：用户提前解锁导致未解锁锁仓加速奖励作废时，只减少 `totalPendingSubsidy`，不减少 `subsidyReserve`；该部分资金重新成为可用备付金。
-- **备付金补缴或提取**：`notifyRewardAmount` 补缴时增加 `subsidyReserve`，并按本次纳入释放曲线的基础奖励增加 `unsettledMaxSubsidyLiability`；`sweepSubsidy` 提取时减少 `subsidyReserve`，且不得破坏上述不变量。
+- **备付金补缴或提取**：`notifyRewardAmount` 补缴时增加 `subsidyReserve`，并按本次纳入释放曲线的基础奖励增加 `unsettledMaxSubsidyLiability`；`sweepSubsidy` 必须先执行全局奖励账本同步，再计算可提取额度。若同步阶段确认存在 `totalSupply == 0` 的空窗奖励自然流失，应按空窗预算释放规则扣减 `unsettledMaxSubsidyLiability`；提取阶段只按 `amount` 减少 `subsidyReserve`，且不得破坏上述不变量。
 
 对应状态转移表如下：
 
@@ -152,12 +152,14 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 | 日常补贴支付 | `claimAll` | `-= 已支付补贴金额` | `-= 已支付补贴金额` | 不变 | 支付 `pendingInviteeBoostReward`、`referralRewards`，以及已到期仓位中已解锁的 `pendingBoostReward`；基础奖励支付不影响补贴账本变量。 |
 | 关闭仓位前补贴支付 | `withdraw` / `withdrawMultiple` | `-= 已支付补贴金额` | `-= 已支付补贴金额` | 不变 | 关闭仓位前支付该仓位尚未领取的 `pendingInviteeBoostReward`；若仓位已到期且仍有未领取 `pendingBoostReward`，同时支付该余额。 |
 | 提前解锁补贴作废 | `withdraw` / `withdrawMultiple` | 不变 | `-= 作废的 pendingBoostReward` | 不变 | 未解锁锁仓加速奖励不再支付，补贴现金未离开合约，重新成为可用备付金。 |
-| 沉淀备付金提取 | `sweepSubsidy` | `-= amount` | 不变 | 不变 | 仅允许提取 `maxSweepableSubsidy()` 范围内的沉淀资金。 |
+| 沉淀备付金提取 | `sweepSubsidy` | 提取阶段 `-= amount` | 不变 | 同步阶段可能因空窗预算释放扣减；提取阶段不变 | 执行前先同步全局奖励账本，再按同步后的 `maxSweepableSubsidy()` 校验并提取沉淀资金。 |
 
 ### 4.2 最大理论补贴率
 系统在配置阶段必须计算最大理论额外支出比例：
 - 假设极端情况：所有用户都有完整的上三级邀请关系、全部填写了有效邀请人，且全部选择最长锁仓期限。
-- **最大补贴率** = 自身推荐补贴 (5%) + 一级返佣 (10%) + 二级返佣 (5%) + 三级返佣 (2%) + 最长锁仓加速奖励 (如 180 天的 50%) = **72%**。
+- **最大补贴率**：`maxSubsidyRate = inviteeBoost + level1 + level2 + level3 + max(boosts[])`。若锁仓档位为空，`max(boosts[])` 按 0 处理。
+- **部署上限**：`MAX_SUBSIDY_RATE` 由构造函数传入并作为 immutable 配置保存，表示本活动池允许的最大额外补贴预算上限。该上限同样采用 BPS 精度；构造函数必须校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`。部署后 `MAX_SUBSIDY_RATE` 与 `maxSubsidyRate` 均不可修改。
+- 示例配置下，自身推荐补贴 (5%) + 一级返佣 (10%) + 二级返佣 (5%) + 三级返佣 (2%) + 最长锁仓加速奖励 (如 180 天的 50%) = **72%**。
 - 在该配置下，系统需要支付的额外补贴理论上限为基础奖励的 72%。因此，包含基础奖励在内的总奖励预算上限为基础奖池的 172%。
 
 ### 4.3 奖励注入与备付金滚动
@@ -167,7 +169,7 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 2. **后续追加（同活动续奖与备付金滚动）**：同一活动池允许管理员在活动规则不变的前提下继续注入基础奖励，用于延长或平滑当前活动的奖励释放。后续追加时，系统需要同时区分“奖励释放曲线口径”和“补贴预算新增口径”：
    - **新释放曲线的基础奖励总额**：`rewardCurveBase = newAmount (本次新注入) + leftoverBase (上一期未发完的剩余基础奖励)`。该值用于计算新的 `rewardRate`，确保上一期未释放完的基础奖励与本次新增基础奖励一起进入新的线性释放周期。
    - **本次新增补贴预算的基础奖励额**：`newSubsidyBase = newAmount (本次新注入)`。
-   - **本次新增所需的理论最大备付金**：`requiredSubsidy = newSubsidyBase * 极限补贴率 (如 72%)`
+   - **本次新增所需的理论最大备付金**：`requiredSubsidy = floor(newSubsidyBase * maxSubsidyRate / BPS)`，舍入规则见第 6.5 节。
    - **当前可用的剩余备付金**：`availableSubsidy = subsidyReserve (当前实际补贴备付金余额) - totalPendingSubsidy (已确认未领取的补贴负债) - unsettledMaxSubsidyLiability (尚未结算消化的最大理论补贴负债)`
      注：必须同时扣除已确认补贴负债和懒结算下尚未确认的最大潜在补贴负债，确保历史用户尚未 Claim 或尚未触发 `updateReward` 的补贴预算不被本活动后续追加奖励挪用。
    - **最终需补缴金额**：若 `requiredSubsidy > availableSubsidy`，则从管理员钱包额外扣除差额并存入 `subsidyReserve`；若资金充足，则无需额外补缴，直接使用池内沉淀备付金。
@@ -185,17 +187,19 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 `unsettledMaxSubsidyLiability` 的核心规则是“注入时增加，用户结算或空窗流失时减少，不因有 TVL 的正常时间流逝自动下降”：
 
 1. `notifyRewardAmount` 将新的基础奖励纳入释放曲线时，按该批基础奖励对应的最大理论补贴率计算 `requiredSubsidy`，并将其加入 `unsettledMaxSubsidyLiability`。
-2. `updateReward` 逐仓结算时，先计算该仓位本次新增的基础奖励 `baseRewardDelta`，再按该段基础奖励对应的最大理论补贴率计算 `maxSubsidyBudgetDelta`，并从 `unsettledMaxSubsidyLiability` 中扣减。该扣减只对应本次新结算出的基础奖励，不得重复扣减已经进入 `pendingBaseReward` 的历史基础奖励。
-3. 若全局水位线更新时发现上一段时间内 `totalSupply == 0`，该段时间对应的基础奖励按空窗奖励自然流失处理；由于该部分基础奖励不会被任何仓位结算为 `baseRewardDelta`，也不会产生补贴，合约应按其对应的最大理论补贴预算扣减 `unsettledMaxSubsidyLiability`。
-4. 同一次 `updateReward` 中，实际产生的自身推荐补贴、锁仓加速奖励和推荐返佣按池级固定比例及仓位记录的 `boostRate` 加入 `totalPendingSubsidy`。若真实补贴低于最大理论预算，差额留在 `subsidyReserve` 中，并在 `totalPendingSubsidy + unsettledMaxSubsidyLiability` 均覆盖后成为可安全复用或提取的沉淀备付金。
-5. 活动启动后最大理论补贴率不可修改；同一活动内后续 `notifyRewardAmount` 仍使用活动启动时确定的·最大理论补贴率·计算新增预算。
+2. `updateReward` 逐仓结算时，先计算该仓位本次新增的基础奖励 `baseRewardDelta`，再按该段基础奖励对应的最大理论补贴率计算 `maxSubsidyBudgetDelta = floor(baseRewardDelta * maxSubsidyRate / BPS)`，并从 `unsettledMaxSubsidyLiability` 中扣减。该扣减只对应本次新结算出的基础奖励，不得重复扣减已经进入 `pendingBaseReward` 的历史基础奖励；实际扣减金额必须为 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)`，防止舍入尾差或极端状态导致下溢。
+3. 若全局水位线更新时发现上一段时间内 `totalSupply == 0`，该段时间对应的基础奖励按空窗奖励自然流失处理。由于该部分基础奖励不会被任何仓位结算为 `baseRewardDelta`，也不会产生补贴，合约应按自然流失的基础奖励额计算 `maxSubsidyBudgetDelta = floor(自然流失的基础奖励额 * maxSubsidyRate / BPS)`，并从 `unsettledMaxSubsidyLiability` 中扣减。该逻辑应位于 `updateReward` 的全局账本同步阶段；`stake`、`withdraw` / `withdrawMultiple`、`notifyRewardAmount`、`claimAll` 以及 `sweepSubsidy` 触发全局同步时均可执行该扣减。实际扣减金额同样必须使用 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)`，避免扣成负数或发生 underflow。
+4. 同一次 `updateReward` 中，实际产生的自身推荐补贴、锁仓加速奖励和推荐返佣按池级固定比例及仓位记录的 `boostRate` 分别向下取整后加入 `totalPendingSubsidy`。若真实补贴低于最大理论预算，差额留在 `subsidyReserve` 中，并在 `totalPendingSubsidy + unsettledMaxSubsidyLiability` 均覆盖后成为可安全复用或提取的沉淀备付金。
+5. 部署完成后 `maxSubsidyRate` 与 `MAX_SUBSIDY_RATE` 均不可修改；同一活动内后续 `notifyRewardAmount` 仍使用部署时确定的 `maxSubsidyRate` 计算新增预算。
 
 ### 4.5 沉淀备付金与安全提取
 由于并非所有仓位都会触发最大补贴率，备付金池可能产生沉淀资金。管理员可通过 `sweepSubsidy` 提取，但必须满足安全边界：
 
 **`maxSweepableSubsidy` 最大可提取金额 = `subsidyReserve` 当前实际补贴备付金余额 - `totalPendingSubsidy` (已确认负债) - `unsettledMaxSubsidyLiability` (未结算最大补贴负债)**
 
-`sweepSubsidy` 的安全边界只能来自上述逻辑账本公式，不能来自 `rewardToken.balanceOf(address(this))` 或同币池总余额。执行时必须校验 `amount <= maxSweepableSubsidy()`，按 `amount` 扣减 `subsidyReserve` 后再转出；不得修改 `totalSupply`、基础奖励水位线、`pendingBaseReward`、`totalPendingSubsidy` 或 `unsettledMaxSubsidyLiability`。同币池中也只能提取账本确认的沉淀补贴备付金。
+`sweepSubsidy` 的安全边界只能来自上述逻辑账本公式，不能来自 `rewardToken.balanceOf(address(this))` 或同币池总余额。执行时必须先进行一次等价于 `updateReward(address(0))` 的全局奖励账本同步，再使用同步后的 `maxSweepableSubsidy()` 校验 `amount`。
+
+全局同步阶段只允许按第 4.4 节规则推进基础奖励水位线状态，并在 `totalSupply == 0` 的空窗场景下释放对应的 `unsettledMaxSubsidyLiability`。同步完成后的提取阶段只能按 `amount` 扣减 `subsidyReserve` 后转出；不得修改 `totalSupply`、`pendingBaseReward`、`totalPendingSubsidy`，也不得在空窗预算释放之外额外修改 `unsettledMaxSubsidyLiability`。同币池中也只能提取账本确认的沉淀补贴备付金。
 
 其中，`unsettledMaxSubsidyLiability` 同时覆盖两类尚未确认真实补贴金额的潜在负债：
 
@@ -204,7 +208,7 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 
 已在 `totalSupply == 0` 空窗期间自然流失、且已完成全局水位线更新确认的基础奖励，不再属于上述潜在负债范围。
 
-因此，`maxSweepableSubsidy()` 不依赖 `remainingBaseReward()` 随时间下降释放额度；只有用户交互完成补贴结算，或空窗奖励自然流失并完成预算扣减后，未使用预算才会释放为沉淀备付金。
+因此，`maxSweepableSubsidy()` 不依赖 `remainingBaseReward()` 随时间下降释放额度；只有用户交互完成补贴结算，或空窗奖励自然流失并完成预算扣减后，未使用预算才会释放为沉淀备付金。只读调用 `maxSweepableSubsidy()` 不修改状态，但当 `totalSupply == 0` 时，应在只读上下文中按第 4.4 节空窗预算释放规则临时计算同步后的可提取额度。`sweepSubsidy` 和 `notifyRewardAmount` 等写入口必须先完成全局同步，再使用同步后的账本值执行校验。
 
 ---
 
@@ -269,7 +273,7 @@ V2 将奖励划分为“仓位奖励”和“推荐返佣”两条线。仓位�
 - **普通管理员**：负责活动奖励注入 `notifyRewardAmount` 等日常运营动作。
 
 ### 6.2 部署固定配置
-V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺的配置（奖励周期、锁仓档位、推荐返佣比例、自身推荐补贴比例、罚金率）必须在部署时通过构造函数一次性声明，并在合约生命周期内不可修改，以保证预算、偿付上限、用户承诺和前端展示口径一致。
+V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺的配置（奖励周期、锁仓档位、推荐返佣比例、自身推荐补贴比例、最大额外补贴预算上限、罚金率）必须在部署时通过构造函数一次性声明，并在合约生命周期内不可修改，以保证预算、偿付上限、用户承诺和前端展示口径一致。
 
 ### 6.3 活动固定配置与仓位字段
 部署时确定的全局配置构成本活动池的固定活动规则。由于经济参数不可修改，历史仓位和新仓位在同一活动池内不会因为运营调参而出现不同补贴口径。
@@ -291,6 +295,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 #### 提前解锁惩罚模块
 - **配置来源**：构造函数参数 `penaltyRate`
 - **一键关闭**：部署时将参数设置为 `0`。即使用户提前提取，也不扣除本金。
+- **上限约束**：`penaltyRate` 必须满足 `penaltyRate <= BPS`。当 `penaltyRate == BPS` 时，提前解锁罚金等于全部本金，用户本金退还额为 0；不得配置为超过 100%，避免罚金超过本金导致提前退出分支不可执行。
 
 #### 锁仓、加速与罚金组合语义
 为避免“锁仓模块关闭”和“罚金模块关闭”之间产生二义性，V2 对锁仓档位、加速比例和罚金率的组合语义作如下约束：
@@ -301,6 +306,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 - **锁仓模块关闭**：当锁仓档位配置为空时，系统仅允许创建活期仓位，`boostRate = 0`，`unlockTime = 0`，并跳过锁仓加速和提前解锁判断。
 - **罚金模块关闭**：`penaltyRate == 0` 仅表示提前解锁不扣本金，不代表锁仓模块关闭。用户仍需要等到到期后才能领取锁仓加速奖励；若提前提取，则未解锁的锁仓加速奖励仍按规则作废。
 - **配置校验**：构造函数必须校验 `durations.length == boosts.length`，档位数量不超过上限，`durations` 不重复，且所有 `duration > 0` 的档位必须满足 `boostRate > 0`。活期档位可由系统隐式支持，不要求管理员显式配置。
+- **补贴预算上限校验**：构造函数必须按第 4.2 节计算 `maxSubsidyRate`，并校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`。`inviteeBoost`、`level1`、`level2`、`level3` 与 `boosts[]` 不设置单项上限；其部署安全边界由聚合后的 `MAX_SUBSIDY_RATE` 约束。
 
 #### Treasury 金库地址
 - **配置接口**：`setTreasury(address _treasury)`
@@ -310,6 +316,8 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 ### 6.5 精度规范
 - **Basis Point（基点）精度**：智能合约中不支持浮点数，因此本 PRD 中涉及的所有百分比（如锁仓加速比例 `boosts`、推荐返佣比例 `rates`、罚金率 `penaltyRate` 等）在合约底层均采用万分位（Basis Point, BPS）精度标准。
 - **换算关系**：`10000` 代表 `100%`，`1000` 代表 `10%`，`500` 代表 `5%`，`1` 代表 `0.01%`。
+- **补贴舍入规则**：所有按比例计算的补贴相关金额均采用向下取整，即 `floor(amount * rate / BPS)`。该规则统一适用于 `notifyRewardAmount` 中的 `requiredSubsidy`、`updateReward` 中的 `maxSubsidyBudgetDelta`，以及实际计提到 `pendingInviteeBoostReward`、`pendingBoostReward`、`referralRewards` 的自身推荐补贴、锁仓加速奖励和推荐返佣。不得对实际补贴支付使用向上取整，避免 BPS 精度尾差导致支付金额超过已按相同口径预留的最大理论预算。
+- **负债饱和扣减**：扣减 `unsettledMaxSubsidyLiability` 时必须使用饱和扣减语义，实际扣减金额为 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)`；当计算出的预算释放额大于当前未结算负债余额时，将 `unsettledMaxSubsidyLiability` 置为 0，不得发生 underflow。
 
 ---
 
@@ -321,7 +329,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 当仓位被提取（`amount = 0`）时，采用 `Swap and Pop` 算法将其从活跃数组中以 O(1) 复杂度移除。
 
 ### 7.2 补贴资金偿付保护
-由于采用了前置强制预扣（预留 72% 最大理论值）机制，`subsidyReserve` 按理论最大补贴率预留资金，用于覆盖已确认补贴负债和当前周期潜在补贴支出。
+由于采用了前置强制预扣机制，`subsidyReserve` 按第 4.2 节计算的 `maxSubsidyRate` 预留资金，用于覆盖已确认补贴负债和当前周期潜在补贴支出。`MAX_SUBSIDY_RATE` 仅作为部署期聚合上限校验，不替代实际备付金计算中的 `maxSubsidyRate`。
 
 ### 7.3 链上 Gas 与 DOS 防御
 三级推荐的计算仅包含数次简单的乘法和判断。通过“费率 0 短路跳出”设计，避免无意义计算。
@@ -373,7 +381,7 @@ V2 仅支持标准 ERC20 余额语义，不支持 fee-on-transfer、rebasing、�
 为防止无意义事件、Gas 空耗和除零风险，以下入口必须拒绝零值或零地址：
 
 - `stake(amount)`、`notifyRewardAmount(baseRewardAmount)`、`recoverERC20(token, amount)` 中的金额必须大于 0。
-- 构造函数中的 `rewardsDuration` 必须大于 0；锁仓档位、推荐返佣比例、自身推荐补贴比例和罚金率必须满足第 6.4 节约束。
+- 构造函数中的 `rewardsDuration` 必须大于 0；锁仓档位、推荐返佣比例、自身推荐补贴比例、`MAX_SUBSIDY_RATE` 和罚金率必须满足第 6.4 节约束。若 `MAX_SUBSIDY_RATE == 0`，则只能部署 `maxSubsidyRate == 0` 的无额外补贴活动池。
 - `stakingToken`、`rewardToken`、`admin`、`treasury` 等核心地址必须为非零地址。
 - 地址为零时使用地址类错误，数量为零时使用数量类错误，避免错误语义混淆。
 
@@ -387,6 +395,8 @@ V2 仅支持标准 ERC20 余额语义，不支持 fee-on-transfer、rebasing、�
 - **数组长度不足**：若 `rewardHistory` 为空，说明系统尚未发生任何有效水位线初始化，返回当前 `rewardPerTokenStored`；若只有一条快照，则返回该快照的 `rewardPerToken`。
 - **同时间戳命中**：若二分查找直接命中 `time == unlockTime` 的快照，直接返回该快照水位线，不执行除法插值，避免 `cp2.time == cp1.time` 导致除零。
 
+V2 不提供 checkpoint 裁剪机制。`rewardHistory` 的增长仅通过写入时机约束、同区块覆盖和 `claimAll` 不落盘三项规则控制：只有真实改变后续全局奖励曲线的入口才写入快照；同一区块内多次改变全局奖励曲线时覆盖最后一条快照；`claimAll` 仅结算用户奖励，不写入新的历史快照。长期运行产生的 `rewardHistory` 存储成本属于 V2 为保持结算逻辑简单、确定和低攻击面所接受的设计代价。
+
 ---
 
 ## 8. 核心接口与事件 (Interfaces & Events)
@@ -399,11 +409,11 @@ V2 仅支持标准 ERC20 余额语义，不支持 fee-on-transfer、rebasing、�
 - `exit()`：批量提取调用者全部活跃仓位，并领取全部可领奖励。
 
 ### 8.2 部署参数与管理员接口
-合约构造函数必须一次性接收并校验本活动池的固定配置，包括但不限于 `stakingToken`、`rewardToken`、`rewardsDuration`、锁仓档位 `durations[] / boosts[]`、推荐补贴与返佣比例 `inviteeBoost / level1 / level2 / level3`、`penaltyRate`、`treasury`、管理员地址等。部署完成后，上述经济参数不可修改；若需要不同规则，应部署新的活动池。
+合约构造函数必须一次性接收并校验本活动池的固定配置，包括但不限于 `stakingToken`、`rewardToken`、`rewardsDuration`、锁仓档位 `durations[] / boosts[]`、推荐补贴与返佣比例 `inviteeBoost / level1 / level2 / level3`、`MAX_SUBSIDY_RATE`、`penaltyRate`、`treasury`、管理员地址等。部署完成后，上述经济参数不可修改；若需要不同规则，应部署新的活动池。
 
 - `notifyRewardAmount(uint256 baseRewardAmount)`：注入基础奖励，并按最大理论补贴率扣取或滚动补贴备付金。
 - `setTreasury(address treasury)`：设置罚金接收地址，不受部署固定配置限制；暂停状态下仍允许超级管理员调用，用于紧急修复 Treasury 地址。
-- `sweepSubsidy(address to, uint256 amount)`：提取安全范围内的沉淀补贴备付金。
+- `sweepSubsidy(address to, uint256 amount)`：先同步全局奖励账本，再提取安全范围内的沉淀补贴备付金。
 - `pause()` / `unpause()`：暂停或恢复合约。
 - `recoverERC20(address token, uint256 amount)`：救援非核心误转资产。
 
@@ -429,7 +439,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `getLockTiers()`：返回本活动池配置的锁仓档位 `durations[]` 与 `boosts[]`。该接口只表示可用档位配置，不表示当前时间点锁仓档位已经开放；前端应结合 `isRewardPeriodActive()` 判断是否允许用户选择 `duration > 0`。活期档位可由前端按第 6.4 节规则隐式展示，不要求必须出现在返回数组中。
 - `getReferralRates()`：返回当前自身推荐补贴和三级返佣比例 `(inviteeBoost, level1, level2, level3)`，所有比例均采用 BPS 精度。
 - `getPenaltyConfig()`：返回当前提前解锁罚金率与 Treasury 地址 `(penaltyRate, treasury)`，供前端展示退出成本和管理员面板核对罚金流向。
-- `getSubsidyConfig()`：返回当前最大理论补贴率、补贴备付金余额、已确认补贴负债和未结算最大补贴负债 `(maxSubsidyRate, subsidyReserve, totalPendingSubsidy, unsettledMaxSubsidyLiability)`，用于展示系统偿付状态和管理员补贴预算。
+- `getSubsidyConfig()`：返回当前最大理论补贴率、部署期最大额外补贴预算上限、补贴备付金余额、已确认补贴负债和未结算最大补贴负债 `(maxSubsidyRate, MAX_SUBSIDY_RATE, subsidyReserve, totalPendingSubsidy, unsettledMaxSubsidyLiability)`，用于展示系统偿付状态和管理员补贴预算。
 - `MAX_ACTIVE_DEPOSITS()`：返回单个用户允许持有的最大活跃仓位数量，供前端在用户接近或达到上限时提前提示。
 
 #### 奖励周期与资金账本视图
@@ -439,7 +449,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `subsidyReserve()`：返回合约当前实际持有的补贴备付金余额。
 - `totalPendingSubsidy()`：返回已确认补贴负债。
 - `unsettledMaxSubsidyLiability()`：返回尚未被用户 `updateReward` 结算消化的最大理论补贴负债，用于覆盖已释放未结算的懒结算缺口和未来尚未释放的潜在补贴。
-- `maxSweepableSubsidy()`：返回当前可安全提取的沉淀备付金上限。
+- `maxSweepableSubsidy()`：返回当前可安全提取的沉淀备付金上限。该视图函数不修改状态；若当前 `totalSupply == 0`，应按第 4.4 节规则在只读上下文中临时计算空窗奖励自然流失对应的 `maxSubsidyBudgetDelta`，并以临时扣减后的 `unsettledMaxSubsidyLiability` 计算返回值。
 
 ### 8.4 事件规范
 所有会影响用户资产、奖励归属、推荐关系或核心配置的状态变更都必须抛出事件。为便于链下统计，奖励类事件必须按奖励类型拆分，不得只抛出一个聚合奖励事件。
@@ -467,7 +477,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `RewardPaid(address indexed user, uint256 totalAmount)`：聚合支付事件，可作为兼容性事件保留，但链下统计不得仅依赖该事件。
 
 资金与配置事件：
-- `ActivityConfigured(uint256 rewardsDuration, uint256 inviteeBoost, uint256 level1, uint256 level2, uint256 level3, uint256 penaltyRate)`：部署时记录本活动池固定规则。锁仓档位可通过独立字段或配套事件记录。
+- `ActivityConfigured(uint256 rewardsDuration, uint256 inviteeBoost, uint256 level1, uint256 level2, uint256 level3, uint256 maxSubsidyRate, uint256 MAX_SUBSIDY_RATE, uint256 penaltyRate)`：部署时记录本活动池固定规则。锁仓档位可通过独立字段或配套事件记录。
 - `RewardAdded(uint256 baseRewardAmount, uint256 subsidyRequired, uint256 subsidyCharged)`
 - `SubsidyReserved(uint256 amount)`
 - `UnsettledMaxSubsidyLiabilityUpdated(uint256 newValue)`

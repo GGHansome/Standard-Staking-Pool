@@ -1,5 +1,17 @@
 # 修改日志 (Changelog)
 
+**2026-06-09**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **补充构造函数比例边界与部署期补贴上限（对应章节：4.2、4.4、6.2、7.2、7.10、8.2、8.3、8.4）**：明确 `maxSubsidyRate = inviteeBoost + level1 + level2 + level3 + max(boosts[])`，并新增由构造函数传入且部署后 immutable 的 `MAX_SUBSIDY_RATE` 作为聚合补贴预算上限，防"预算爆炸",还能抓"手滑"；构造函数必须校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`，补贴实际预扣和未结算预算仍使用 `maxSubsidyRate`。同步补充 `penaltyRate <= BPS`，允许 `penaltyRate == BPS` 表示提前解锁罚没全部本金，但禁止超过 100% 导致罚金超过本金；`getSubsidyConfig()` 与 `ActivityConfigured` 需暴露 `MAX_SUBSIDY_RATE` 以便前端和管理员核对部署配置。
+
+**2026-06-08**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **明确 `sweepSubsidy` 前置同步空窗预算释放（对应章节：4.1、4.4、4.5、8.2、8.3）**：`sweepSubsidy` 执行时必须先进行全局奖励账本同步，再按同步后的 `maxSweepableSubsidy()` 校验可提取额度；若同步阶段确认 `totalSupply == 0` 空窗期间基础奖励自然流失，则按同一 `maxSubsidyBudgetDelta` 口径饱和扣减 `unsettledMaxSubsidyLiability`。提取阶段只扣减 `subsidyReserve`，不得在空窗预算释放之外额外修改补贴负债账本；视图函数 `maxSweepableSubsidy()` 不修改状态，但在 `totalSupply == 0` 时应只读临时计算空窗预算释放后的可提取额度。
+- **明确 V2 不提供 checkpoint 裁剪机制（对应章节：7.11）**：补充说明 `rewardHistory` 的长期增长仅通过写入时机约束、同区块覆盖和 `claimAll` 不落盘三项规则控制；V2 不按时间或仓位状态删除历史快照，长期运行产生的存储成本属于为保持结算逻辑简单、确定和低攻击面而接受的设计代价。
+- **统一补贴预算与计提的舍入规则（对应章节：4.3、4.4、6.5）**：明确 `requiredSubsidy`、`maxSubsidyBudgetDelta` 以及自身推荐补贴、锁仓加速奖励、推荐返佣等实际补贴计提均按 `floor(amount * rate / BPS)` 向下取整；扣减 `unsettledMaxSubsidyLiability` 时必须使用 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)` 做饱和扣减，避免舍入尾差或极端状态导致 underflow。
+
 **2026-06-07**
 
 **PRD/V2/PRD_V2_Staking.md**

@@ -4,11 +4,12 @@
 
 **PRD/V2/PRD_V2_Staking.md**
 - **补充基础奖池未支付余额账本口径（对应章节：2.3、4.1、8.3）**：明确基础奖池未支付余额由独立全局变量 `baseRewardReserve` 维护，并规定其在基础奖励注入、基础奖励结算、基础奖励支付和空窗奖励自然流失确认时的增减规则；`baseRewardReserve()` 作为链上校验口径对外暴露，`remainingBaseReward()` 仅用于展示当前周期尚未释放的基础奖励，不得作为偿付校验口径。
+- **精简并统一补贴、罚金与快照口径（对应章节：4.3、4.4、5.2、5.3、6.5、7.3）**：统一 `notifyRewardAmount` 的入参名称为 `baseRewardAmount`，补充 `subsidyCharged` 的差额计算；将自身推荐补贴统一为 `inviteeBoost` 口径，并把提前解锁罚金改为 `floor(amount * penaltyRate / BPS)`；同时压缩 `maxSubsidyBudgetDelta` 的重复说明，统一饱和扣减和 `claimAll` 表达。
 
 **2026-06-09**
 
 **PRD/V2/PRD_V2_Staking.md**
-- **补充构造函数比例边界与部署期补贴上限（对应章节：4.2、4.4、6.2、7.2、7.10、8.2、8.3、8.4）**：明确 `maxSubsidyRate = inviteeBoost + level1 + level2 + level3 + max(boosts[])`，并新增由构造函数传入且部署后 immutable 的 `MAX_SUBSIDY_RATE` 作为聚合补贴预算上限，防"预算爆炸",还能抓"手滑"；构造函数必须校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`，补贴实际预扣和未结算预算仍使用 `maxSubsidyRate`。同步补充 `penaltyRate <= BPS`，允许 `penaltyRate == BPS` 表示提前解锁罚没全部本金，但禁止超过 100% 导致罚金超过本金；`getSubsidyConfig()` 与 `ActivityConfigured` 需暴露 `MAX_SUBSIDY_RATE` 以便前端和管理员核对部署配置。
+- **补充构造函数比例边界与部署期补贴上限（对应章节：4.2、4.4、6.2、7.2、7.10、8.2、8.3、8.4）**：明确 `maxSubsidyRate = inviteeBoost + level1 + level2 + level3 + max(boosts[])`，并新增由构造函数传入且部署后 immutable 的 `MAX_SUBSIDY_RATE` 作为聚合补贴预算上限，防止部署配置超出活动预算上限或误配置；构造函数必须校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`，补贴实际预扣和未结算预算仍使用 `maxSubsidyRate`。同步补充 `penaltyRate <= BPS`，允许 `penaltyRate == BPS` 表示提前解锁罚没全部本金，但禁止超过 100% 导致罚金超过本金；`getSubsidyConfig()` 与 `ActivityConfigured` 需暴露 `MAX_SUBSIDY_RATE` 以便前端和管理员核对部署配置。
 
 **2026-06-08**
 
@@ -28,7 +29,7 @@
 
 **PRD/V2/PRD_V2_Staking.md**
 - **明确支持同币池与异币池并补齐同币偿付边界（对应章节：1.3、2.3、4.1、4.5、7.8、7.9）**：将“单币质押与分红”调整为更准确的平台币 / 社区代币质押激励表述，并明确 V2 同时支持 `stakingToken != rewardToken` 的异币池和 `stakingToken == rewardToken` 的同币池。同币池下本金、基础奖励、补贴备付金和罚金处理中间余额可共用同一 ERC20 余额，但必须通过独立逻辑资金桶维护归属；`sweepSubsidy` 只能按 `maxSweepableSubsidy()` 的账本边界提取沉淀补贴，不能以合约总余额反推可提额度；同时补充同币池下核心资产救援限制、标准 ERC20 到账校验和 `recoverERC20` / `sweepSubsidy` 的安全模型区别。
-- **固化单活动池经济参数与仓位字段口径（对应章节：1.3、2.4、6.2、6.3、6.4、7.10、8.2、8.4）**：明确 V2 合约实例是“部署时可配置、运行期规则固定”的独立活动池；奖励周期、锁仓档位、推荐补贴与返佣比例、罚金率等经济参数必须通过构造函数一次性声明并在合约生命周期内不可修改。由于池级经济参数不再运行期变化，`DepositRecord` 不再保存 `penaltyRate`、`inviteeBoostRate` 和三级返佣比例快照，只保留与单笔仓位选择直接相关的 `boostRate` 以及独立水位线、未领奖励字段。
+- **固化单活动池经济参数与仓位字段口径（对应章节：1.3、2.4、6.2、6.3、6.4、7.10、8.2、8.4）**：明确 V2 合约实例是“部署时可配置、运行期规则固定”的独立活动池；奖励周期、锁仓档位、推荐补贴与返佣比例、罚金率等经济参数必须通过构造函数一次性声明并在合约生命周期内不可修改。由于池级经济参数不再运行期变化，`DepositRecord` 不再保存 `penaltyRate`、`inviteeBoost` 和三级返佣比例快照，只保留与单笔仓位选择直接相关的 `boostRate` 以及独立水位线、未领奖励字段。
 - **新增有效基础奖励释放周期作为锁仓开放唯一判断（对应章节：2.2、4.3、5.1、7.5、7.6、8.3）**：定义 `isRewardPeriodActive()`，当且仅当 `rewardRate > 0 && block.timestamp < periodFinish` 时返回 `true`；新建锁仓仓位必须满足 `isRewardPeriodActive() == true`，活期仓位 `duration == 0` 不受该限制。首次基础奖励注入前、两次奖励周期之间的空窗期均只允许活期质押；历史锁仓仓位不受当前开放状态影响。锁仓期限允许超过剩余奖励周期，但前提是创建该仓位时处于有效基础奖励释放周期。
 - **明确空池奖励按 V1 逻辑自然流失（对应章节：4.1、4.3、4.4、4.5、7.6）**：`notifyRewardAmount` 注入基础奖励后立即启动释放周期，不等待首个有效仓位进入，也不采用空池暂停机制。奖励释放期间若 `totalSupply == 0`，`rewardPerToken` 不增长，空池期间基础奖励不得在后续首个质押者进入时补分配；该段基础奖励视为自然流失，并在全局水位线更新时同步释放其对应的最大理论补贴预算。
 - **同步固定配置后的管理员接口、暂停规则与事件规范（对应章节：6.4、7.7、8.2、8.3、8.4）**：管理员接口移除 `setRewardsDuration`、`setLockTiers`、`setReferralRates`、`setPenaltyRate` 等运行期经济参数修改入口，仅保留 `notifyRewardAmount`、`setTreasury`、`sweepSubsidy`、暂停和救援接口；暂停状态下阻断范围收敛为 `stake`、`notifyRewardAmount`、`sweepSubsidy`，`setTreasury` 仍可用于紧急修复。视图层新增 `isRewardPeriodActive()`，并明确 `getLockTiers()` 只表示配置档位、不表示当前锁仓开放状态；事件层新增 `ActivityConfigured`，移除运行期经济参数更新事件。
@@ -43,15 +44,15 @@
 **PRD/V2/PRD_V2_Staking.md**
 - **补全 V2 前端与索引器所需视图接口（对应章节：7.1、8.3）**：按仓位与奖励、推荐关系、配置聚合、奖励周期与资金账本四类补充查询能力，新增 `inviterOf`、`hasSetInviter`、`getUpline`、`getLockTiers`、`getReferralRates`、`getPenaltyConfig`、`getSubsidyConfig`、`MAX_ACTIVE_DEPOSITS`、`getRewardSchedule`、`remainingBaseReward`、`totalStakedOf` 和 `getUserDeposits` 等接口要求；同时明确活跃仓位数量上限必须对前端和索引器可查询。
 - **补充配置修改时机的业务与偿付原因（对应章节：6.2）**：明确即使仓位已保存参数快照，仍禁止锁仓档位、推荐返佣比例和罚金率在奖励周期中修改。`boostRate` 与返佣比例会影响本周期最大理论补贴率和 `subsidyReserve` 预扣口径，周期中调高可能破坏 `subsidyReserve >= totalPendingSubsidy`；罚金率虽不影响补贴偿付，但属于用户退出成本，应保持同一周期内营销与前端展示口径一致。
-- **明确 `setTreasury` 的周期与暂停规则（对应章节：6.4、7.6、8.2）**：`setTreasury` 不受奖励周期限制，因为 Treasury 地址不进入仓位快照、奖励账本、补贴备付金或最大理论补贴率计算；暂停状态下仍允许超级管理员调用，用于在 Treasury 地址错误、失效或存在风险时不恢复其它高风险入口即可完成修复。
-- **调整锁仓加速奖励的切分、领取与展示口径（对应章节：2.1、2.3、3.3、4.1、4.4、5.2、5.3、7.10、8.1、8.3）**：`DepositRecord` 新增 `rewardPerTokenAtUnlock` 缓存字段，明确 `updateReward` 在仓位首次跨越 `unlockTime` 时执行历史水位线二分查找与插值切分，并将锁仓期内 boost 持续记入 `pendingBoostReward`，解决“持续记账”与到期切分之间的口径冲突；仓位到期后已解锁 boost 可通过 `claimAll` 领取，无需先 withdraw，未到期 boost 仍仅记账且提前提取时作废；同步明确 `earned(user)` 包含已到期未领取的锁仓加速奖励，`earnedByDeposit(depositId)` 需区分未到期记账态与已到期可领取态。
+- **明确 `setTreasury` 的周期与暂停规则（对应章节：6.4、7.7、8.2）**：`setTreasury` 不受奖励周期限制，因为 Treasury 地址不进入仓位快照、奖励账本、补贴备付金或最大理论补贴率计算；暂停状态下仍允许超级管理员调用，用于在 Treasury 地址错误、失效或存在风险时不恢复其它高风险入口即可完成修复。
+- **调整锁仓加速奖励的切分、领取与展示口径（对应章节：2.1、2.3、3.3、4.1、4.4、5.2、5.3、7.11、8.1、8.3）**：`DepositRecord` 新增 `rewardPerTokenAtUnlock` 缓存字段，明确 `updateReward` 在仓位首次跨越 `unlockTime` 时执行历史水位线二分查找与插值切分，并将锁仓期内 boost 持续记入 `pendingBoostReward`，解决“持续记账”与到期切分之间的口径冲突；仓位到期后已解锁 boost 可通过 `claimAll` 领取，无需先 withdraw，未到期 boost 仍仅记账且提前提取时作废；同步明确 `earned(user)` 包含已到期未领取的锁仓加速奖励，`earnedByDeposit(depositId)` 需区分未到期记账态与已到期可领取态。
 - **补全仓位归属与关闭状态语义（对应章节：2.3、5.1、5.3、8.3）**：`DepositRecord` 新增 `owner` 字段，支持 `getDeposit(depositId)`、`withdraw(depositId)` 和 `withdrawMultiple(depositIds)` 基于全局 `depositId` 进行 O(1) 归属查询与权限校验；仓位关闭状态不单独存储 `closed`，统一由 `owner != address(0) && amount == 0` 推导，避免多状态源不同步。
 
 **2026-05-31**
 
 **PRD/V2/PRD_V2_Staking.md**
 - **明确有效邀请人业务定义（对应章节：3.5、5.1、7.4）**：有效邀请人必须是已完成首次质押绑定的系统参与者（`hasSetInviter[inviter] == true`），同时满足非零、非本人、向上 3 级不成环；首次质押传入非零但无效邀请人时必须 revert，冷启动阶段首批用户只能以“无上级”身份完成首次质押。
-- **补充历史水位线快照边界（对应章节：3.3、7.10）**：明确 `rewardHistory` 快照需记录 `block.timestamp`、`rewardPerToken` 与 `periodFinish`，并统一使用带 `periodFinish` 截断的插值公式处理奖励周期边界；同时说明正常到期提取前必须先 `updateReward` 写入当前时间快照，因此即使到期后长期无人交互，当前交易也会补上 `cp2`。
+- **补充历史水位线快照边界（对应章节：3.3、7.11）**：明确 `rewardHistory` 快照需记录 `block.timestamp`、`rewardPerToken` 与 `periodFinish`，并统一使用带 `periodFinish` 截断的插值公式处理奖励周期边界；若找不到右侧真实快照，应使用虚拟当前节点作为 `cp2` 参与本次切分，不因到期切分强制写入 `rewardHistory`。
 - **明确 `withdraw` 关闭前奖励结清规则（对应章节：4.1、4.4、5.3、8.1）**：`withdraw` / `withdrawMultiple` 在销毁仓位并移出 `activeDepositIds` 前，必须结清该仓位的 `pendingBaseReward` 和 `pendingInviteeBoostReward`；到期仓位同时支付 `pendingBoostReward`，提前违约仓位仅作废未解锁锁仓加速奖励，避免仓位关闭后 `claimAll()` 不再遍历导致奖励无法领取。
 - **补充补贴账本状态转移表（对应章节：4.1）**：用表格明确 `notifyRewardAmount`、`updateReward`、`claimAll`、`withdraw` / `withdrawMultiple`、`sweepSubsidy` 对 `subsidyReserve` 和 `totalPendingSubsidy` 的影响，降低后续实现时对“支付、作废、提取”三类动作的理解歧义。
 

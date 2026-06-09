@@ -40,7 +40,7 @@ V2 支持两种部署模式：**异币池**（`stakingToken != rewardToken`）�
 V2 的资金账户采用逻辑资金桶模型。异币池中，本金桶与奖励相关资金桶天然分布在不同 ERC20 资产上；同币池中，多个资金桶共用同一个 ERC20 余额，但账本上仍必须独立维护，不得通过合约总余额反推出某一资金桶的可用额度。
 
 - **用户本金桶（Principal Pool）**：所有活跃仓位的本金余额，对应全局 `totalSupply` 和各 `DepositRecord.amount` 汇总。
-- **基础奖池（Base Reward Pool）**：由 `notifyRewardAmount` 注入，并进入基础水位线模型按周期平滑释放。
+- **基础奖池（Base Reward Pool）**：由 `notifyRewardAmount` 注入，并进入基础水位线模型按周期平滑释放；其未支付余额对应全局账本变量 `baseRewardReserve`。
 - **补贴备付金池（Subsidy Reserve）**：合约当前实际持有、专用于支付锁仓加速奖励、自身推荐补贴和推荐返佣的补贴资金余额。该变量采用现金口径：补缴和沉淀回收会增加余额，补贴实际支付或管理员安全提取会减少余额。
 - **已确认补贴负债（`totalPendingSubsidy`）**：系统当前已确认但尚未支付的补贴负债总额。该变量用于约束补贴备付金的滚动抵扣和安全提取。
 - **未结算最大补贴负债（`unsettledMaxSubsidyLiability`）**：系统已经为基础奖励预留、但尚未被用户 `updateReward` 实际结算消化的最大理论补贴预算。该变量覆盖“已释放但用户尚未交互确认”的懒结算缺口，以及“尚未释放”的未来潜在补贴负债；已因空窗无人质押而自然流失的基础奖励不再产生补贴预算占用。
@@ -125,9 +125,18 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 
 异币池中，本金桶由 `stakingToken` 余额覆盖，基础奖池桶和补贴备付金桶由 `rewardToken` 余额覆盖。同币池中，上述资金桶共用同一 ERC20 余额，但仍必须通过独立账本变量表达归属，安全提取或救援逻辑不得直接以 `balanceOf(address(this))` 作为可提取余额。
 
+基础奖池未支付余额必须通过独立全局账本变量 `baseRewardReserve` 维护，不得等同于 `remainingBaseReward()`，也不得通过遍历所有仓位的待领奖励反推。`baseRewardReserve` 表示合约当前仍需覆盖的基础奖励余额，其状态变化规则如下：
+
+- `notifyRewardAmount(baseRewardAmount)` 将新的基础奖励实际转入合约并纳入释放曲线时，`baseRewardReserve += baseRewardAmount`。续奖时上一期 `leftoverBase` 只是重新进入新的释放曲线，不重复增加 `baseRewardReserve`。
+- `updateReward` 只将基础奖励结算进仓位 `pendingBaseReward`，不发生 token 支付，因此不得减少 `baseRewardReserve`。
+- `claimAll`、`withdraw`、`withdrawMultiple` 实际支付基础奖励时，`baseRewardReserve` 按本次支付的基础奖励金额等额减少。
+- `totalSupply == 0` 空窗期间基础奖励自然流失，并且通过全局奖励账本同步确认流失金额时，`baseRewardReserve` 按本次确认流失的基础奖励金额等额减少。
+
+因此，下文“基础奖池未支付余额”均指 `baseRewardReserve`。该变量是资产余额覆盖不变量的链上校验口径，`remainingBaseReward()` 仅用于前端展示当前周期尚未释放的基础奖励，不能用于偿付校验。
+
 任意时刻必须满足以下账本不变量：
 
-1. **资产余额覆盖不变量**：异币池中，`stakingToken` 余额必须覆盖 `totalSupply` 及罚金处理中间余额，`rewardToken` 余额必须覆盖基础奖池未支付余额与 `subsidyReserve`；同币池中，单一 token 余额必须同时覆盖 `totalSupply`、基础奖池未支付余额、`subsidyReserve` 及罚金处理中间余额。
+1. **资产余额覆盖不变量**：异币池中，`stakingToken` 余额必须覆盖 `totalSupply` 及罚金处理中间余额，`rewardToken` 余额必须覆盖 `baseRewardReserve` 与 `subsidyReserve`；同币池中，单一 token 余额必须同时覆盖 `totalSupply`、`baseRewardReserve`、`subsidyReserve` 及罚金处理中间余额。
 2. `subsidyReserve >= totalPendingSubsidy`，确保所有已确认但尚未支付的补贴负债都有补贴现金兜底。
 3. `subsidyReserve >= totalPendingSubsidy + unsettledMaxSubsidyLiability`，确保已确认补贴负债和所有尚未结算消化的最大理论补贴预算均有补贴现金兜底。
 4. `availableSubsidy = subsidyReserve - totalPendingSubsidy - unsettledMaxSubsidyLiability`，仅该差额可被本活动后续追加奖励滚动复用或在满足安全边界时被管理员提取。
@@ -445,6 +454,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 #### 奖励周期与资金账本视图
 - `getRewardSchedule()`：返回当前奖励周期状态 `(rewardsDuration, periodFinish, rewardRate, lastUpdateTime, rewardPerTokenStored)`，供前端展示剩余周期、APR 估算与索引器对账。
 - `isRewardPeriodActive()`：返回当前是否处于有效基础奖励释放周期，定义见第 2.2 节。该函数返回 `false` 时，`stake` 仍可创建活期仓位，但任何 `duration > 0` 的锁仓选择都必须 revert。
+- `baseRewardReserve()`：返回基础奖池未支付余额，作为第 4.1 节资产余额覆盖不变量的链上校验口径。
 - `remainingBaseReward()`：返回当前周期尚未释放的基础奖励余额，即 `rewardRate * (periodFinish - block.timestamp)` 在未结束周期内对应的未释放数量；若当前周期已结束则返回 0。该值仅用于前端展示奖励周期剩余额度，不得单独作为 `maxSweepableSubsidy()` 的安全提取依据。
 - `subsidyReserve()`：返回合约当前实际持有的补贴备付金余额。
 - `totalPendingSubsidy()`：返回已确认补贴负债。

@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
-import "../src/staking.sol";
+import "../src/V1/staking.sol";
 import "../test/mocks/MockERC20.sol";
 
 /**

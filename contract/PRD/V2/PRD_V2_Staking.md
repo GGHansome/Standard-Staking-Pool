@@ -167,7 +167,7 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 系统在配置阶段必须计算最大理论额外支出比例：
 - 假设极端情况：所有用户都有完整的上三级邀请关系、全部填写了有效邀请人，且全部选择最长锁仓期限。
 - **最大补贴率**：`maxSubsidyRate = inviteeBoost + level1 + level2 + level3 + max(boosts[])`。若锁仓档位为空，`max(boosts[])` 按 0 处理。
-- **部署上限**：`MAX_SUBSIDY_RATE` 由构造函数传入并作为 immutable 配置保存，表示本活动池允许的最大额外补贴预算上限。该上限同样采用 BPS 精度；构造函数必须校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`。部署后 `MAX_SUBSIDY_RATE` 与 `maxSubsidyRate` 均不可修改。
+- **部署上限**：`maxSubsidyRateCap` 由构造函数传入并作为 immutable 配置保存，表示本活动池允许的最大额外补贴预算上限。该上限同样采用 BPS 精度；构造函数必须校验 `maxSubsidyRate <= maxSubsidyRateCap`。部署后 `maxSubsidyRateCap` 与 `maxSubsidyRate` 均不可修改。
 - 示例配置下，自身推荐补贴 (5%) + 一级返佣 (10%) + 二级返佣 (5%) + 三级返佣 (2%) + 最长锁仓加速奖励 (如 180 天的 50%) = **72%**。
 - 在该配置下，系统需要支付的额外补贴理论上限为基础奖励的 72%。因此，包含基础奖励在内的总奖励预算上限为基础奖池的 172%。
 
@@ -198,7 +198,7 @@ V2 必须将本金、基础奖励和额外补贴拆分为互不挪用的逻辑�
 2. `updateReward` 逐仓结算时，先计算该仓位本次新增的基础奖励，再按 `maxSubsidyBudgetDelta = floor(新增基础奖励 * maxSubsidyRate / BPS)` 计算该段最大理论补贴预算，并从 `unsettledMaxSubsidyLiability` 中饱和扣减。该扣减只对应本次新结算出的基础奖励，不得重复扣减已经进入 `pendingBaseReward` 的历史基础奖励；实际扣减金额为 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)`，防止舍入尾差或极端状态导致 underflow。
 3. 若全局水位线更新时发现上一段时间内 `totalSupply == 0`，该段时间对应的基础奖励按空窗奖励自然流失处理。由于该部分基础奖励不会被任何仓位结算，也不会产生补贴，合约应按自然流失的基础奖励额计算 `maxSubsidyBudgetDelta = floor(自然流失的基础奖励额 * maxSubsidyRate / BPS)`，并从 `unsettledMaxSubsidyLiability` 中饱和扣减。该逻辑应位于 `updateReward` 的全局账本同步阶段；`stake`、`withdraw` / `withdrawMultiple`、`notifyRewardAmount`、`claimAll` 以及 `sweepSubsidy` 触发全局同步时均可执行该扣减。
 4. 同一次 `updateReward` 中，实际产生的自身推荐补贴、锁仓加速奖励和推荐返佣按池级固定比例及仓位记录的 `boostRate` 分别向下取整后加入 `totalPendingSubsidy`。若真实补贴低于最大理论预算，差额留在 `subsidyReserve` 中，并在 `totalPendingSubsidy + unsettledMaxSubsidyLiability` 均覆盖后成为可安全复用或提取的沉淀备付金。
-5. 部署完成后 `maxSubsidyRate` 与 `MAX_SUBSIDY_RATE` 均不可修改；同一活动内后续 `notifyRewardAmount` 仍使用部署时确定的 `maxSubsidyRate` 计算新增预算。
+5. 部署完成后 `maxSubsidyRate` 与 `maxSubsidyRateCap` 均不可修改；同一活动内后续 `notifyRewardAmount` 仍使用部署时确定的 `maxSubsidyRate` 计算新增预算。
 
 ### 4.5 沉淀备付金与安全提取
 由于并非所有仓位都会触发最大补贴率，备付金池可能产生沉淀资金。管理员可通过 `sweepSubsidy` 提取，但必须满足安全边界：
@@ -314,7 +314,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 - **锁仓模块关闭**：当锁仓档位配置为空时，系统仅允许创建活期仓位，`boostRate = 0`，`unlockTime = 0`，并跳过锁仓加速和提前解锁判断。
 - **罚金模块关闭**：`penaltyRate == 0` 仅表示提前解锁不扣本金，不代表锁仓模块关闭。用户仍需要等到到期后才能领取锁仓加速奖励；若提前提取，则未解锁的锁仓加速奖励仍按规则作废。
 - **配置校验**：构造函数必须校验 `durations.length == boosts.length`，档位数量不超过上限，`durations` 不重复，且所有 `duration > 0` 的档位必须满足 `boostRate > 0`。活期档位可由系统隐式支持，不要求管理员显式配置。
-- **补贴预算上限校验**：构造函数必须按第 4.2 节计算 `maxSubsidyRate`，并校验 `maxSubsidyRate <= MAX_SUBSIDY_RATE`。`inviteeBoost`、`level1`、`level2`、`level3` 与 `boosts[]` 不设置单项上限；其部署安全边界由聚合后的 `MAX_SUBSIDY_RATE` 约束。
+- **补贴预算上限校验**：构造函数必须按第 4.2 节计算 `maxSubsidyRate`，并校验 `maxSubsidyRate <= maxSubsidyRateCap`。`inviteeBoost`、`level1`、`level2`、`level3` 与 `boosts[]` 不设置单项上限；其部署安全边界由聚合后的 `maxSubsidyRateCap` 约束。
 
 #### Treasury 金库地址
 - **配置接口**：`setTreasury(address _treasury)`
@@ -337,7 +337,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 当仓位被提取（`amount = 0`）时，采用 `Swap and Pop` 算法将其从活跃数组中以 O(1) 复杂度移除。
 
 ### 7.2 补贴资金偿付保护
-由于采用了前置强制预扣机制，`subsidyReserve` 按第 4.2 节计算的 `maxSubsidyRate` 预留资金，用于覆盖已确认补贴负债和当前周期潜在补贴支出。`MAX_SUBSIDY_RATE` 仅作为部署期聚合上限校验，不替代实际备付金计算中的 `maxSubsidyRate`。
+由于采用了前置强制预扣机制，`subsidyReserve` 按第 4.2 节计算的 `maxSubsidyRate` 预留资金，用于覆盖已确认补贴负债和当前周期潜在补贴支出。`maxSubsidyRateCap` 仅作为部署期聚合上限校验，不替代实际备付金计算中的 `maxSubsidyRate`。
 
 ### 7.3 链上 Gas 与 DOS 防御
 三级推荐的计算仅包含数次简单的乘法和判断。通过“费率 0 短路跳出”设计，避免无意义计算。
@@ -389,7 +389,7 @@ V2 仅支持标准 ERC20 余额语义，不支持 fee-on-transfer、rebasing、�
 为防止无意义事件、Gas 空耗和除零风险，以下入口必须拒绝零值或零地址：
 
 - `stake(amount)`、`notifyRewardAmount(baseRewardAmount)`、`recoverERC20(token, amount)` 中的金额必须大于 0。
-- 构造函数中的 `rewardsDuration` 必须大于 0；锁仓档位、推荐返佣比例、自身推荐补贴比例、`MAX_SUBSIDY_RATE` 和罚金率必须满足第 6.4 节约束。若 `MAX_SUBSIDY_RATE == 0`，则只能部署 `maxSubsidyRate == 0` 的无额外补贴活动池。
+- 构造函数中的 `rewardsDuration` 必须大于 0；锁仓档位、推荐返佣比例、自身推荐补贴比例、`maxSubsidyRateCap` 和罚金率必须满足第 6.4 节约束。若 `maxSubsidyRateCap == 0`，则只能部署 `maxSubsidyRate == 0` 的无额外补贴活动池。
 - `stakingToken`、`rewardToken`、`admin`、`treasury` 等核心地址必须为非零地址。
 - 地址为零时使用地址类错误，数量为零时使用数量类错误，避免错误语义混淆。
 
@@ -400,7 +400,7 @@ V2 仅支持标准 ERC20 余额语义，不支持 fee-on-transfer、rebasing、�
 
 - **无右侧真实快照 / `unlockTime` 晚于最后一条快照**：表示最后一条真实快照后没有新的曲线折点。此时使用虚拟当前节点作为 `cp2`；写路径基于本次已结算的 `rewardPerTokenStored` 构造，只读函数按当前 `rewardPerToken()` 临时构造。虚拟节点不写入 `rewardHistory`。
 - **`unlockTime` 早于或等于第一条快照**：返回第一条快照的 `rewardPerToken`。正常锁仓仓位不应触发该分支，因为质押创建时已经写入了 `stakeTime <= unlockTime` 的快照。
-- **数组长度不足**：若 `rewardHistory` 为空，说明系统尚未发生任何有效水位线初始化，返回当前 `rewardPerTokenStored`；若只有一条快照，则返回该快照的 `rewardPerToken`。
+- **数组长度不足**：若 `rewardHistory` 为空，说明系统尚未发生任何有效水位线初始化，返回当前 `rewardPerTokenStored`。
 - **同时间戳命中**：若二分查找直接命中 `time == unlockTime` 的快照，直接返回该快照水位线，不执行除法插值，避免 `cp2.time == cp1.time` 导致除零。
 
 V2 不提供 checkpoint 裁剪机制。`rewardHistory` 的增长仅通过写入时机约束、同区块覆盖和 `claimAll` 不落盘三项规则控制：只有真实改变后续全局奖励曲线的入口才写入快照；同一区块内多次改变全局奖励曲线时覆盖最后一条快照；`claimAll` 仅结算用户奖励，不写入新的历史快照。长期运行产生的 `rewardHistory` 存储成本属于 V2 为保持结算逻辑简单、确定和低攻击面所接受的设计代价。
@@ -417,7 +417,7 @@ V2 不提供 checkpoint 裁剪机制。`rewardHistory` 的增长仅通过写入�
 - `exit()`：批量提取调用者全部活跃仓位，并领取全部可领奖励。
 
 ### 8.2 部署参数与管理员接口
-合约构造函数必须一次性接收并校验本活动池的固定配置，包括但不限于 `stakingToken`、`rewardToken`、`rewardsDuration`、锁仓档位 `durations[] / boosts[]`、推荐补贴与返佣比例 `inviteeBoost / level1 / level2 / level3`、`MAX_SUBSIDY_RATE`、`penaltyRate`、`treasury`、管理员地址等。部署完成后，上述经济参数不可修改；若需要不同规则，应部署新的活动池。
+合约构造函数必须一次性接收并校验本活动池的固定配置，包括但不限于 `stakingToken`、`rewardToken`、`rewardsDuration`、锁仓档位 `durations[] / boosts[]`、推荐补贴与返佣比例 `inviteeBoost / level1 / level2 / level3`、`maxSubsidyRateCap`、`penaltyRate`、`treasury`、管理员地址等。部署完成后，上述经济参数不可修改；若需要不同规则，应部署新的活动池。
 
 - `notifyRewardAmount(uint256 baseRewardAmount)`：注入基础奖励，并按最大理论补贴率扣取或滚动补贴备付金。
 - `setTreasury(address treasury)`：设置罚金接收地址，不受部署固定配置限制；暂停状态下仍允许超级管理员调用，用于紧急修复 Treasury 地址。
@@ -447,7 +447,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `getLockTiers()`：返回本活动池配置的锁仓档位 `durations[]` 与 `boosts[]`。该接口只表示可用档位配置，不表示当前时间点锁仓档位已经开放；前端应结合 `isRewardPeriodActive()` 判断是否允许用户选择 `duration > 0`。活期档位可由前端按第 6.4 节规则隐式展示，不要求必须出现在返回数组中。
 - `getReferralRates()`：返回当前自身推荐补贴和三级返佣比例 `(inviteeBoost, level1, level2, level3)`，所有比例均采用 BPS 精度。
 - `getPenaltyConfig()`：返回当前提前解锁罚金率与 Treasury 地址 `(penaltyRate, treasury)`，供前端展示退出成本和管理员面板核对罚金流向。
-- `getSubsidyConfig()`：返回当前最大理论补贴率、部署期最大额外补贴预算上限、补贴备付金余额、已确认补贴负债和未结算最大补贴负债 `(maxSubsidyRate, MAX_SUBSIDY_RATE, subsidyReserve, totalPendingSubsidy, unsettledMaxSubsidyLiability)`，用于展示系统偿付状态和管理员补贴预算。
+- `getSubsidyConfig()`：返回当前最大理论补贴率、部署期最大额外补贴预算上限、补贴备付金余额、已确认补贴负债和未结算最大补贴负债 `(maxSubsidyRate, maxSubsidyRateCap, subsidyReserve, totalPendingSubsidy, unsettledMaxSubsidyLiability)`，用于展示系统偿付状态和管理员补贴预算。
 - `MAX_ACTIVE_DEPOSITS()`：返回单个用户允许持有的最大活跃仓位数量，供前端在用户接近或达到上限时提前提示。
 
 #### 奖励周期与资金账本视图
@@ -479,15 +479,16 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `LockBoostRewardForfeited(address indexed user, uint256 indexed depositId, uint256 amount)`
 
 奖励支付事件：
-- `BaseRewardPaid(address indexed user, uint256 amount)`
-- `InviteeBoostRewardPaid(address indexed user, uint256 amount)`
+- `BaseRewardPaid(address indexed user, uint256 indexed depositId, uint256 amount)`
+- `InviteeBoostRewardPaid(address indexed user, uint256 indexed depositId, uint256 amount)`
 - `ReferralRewardPaid(address indexed user, uint256 amount)`
 - `LockBoostRewardPaid(address indexed user, uint256 indexed depositId, uint256 amount)`
 - `RewardPaid(address indexed user, uint256 totalAmount)`：聚合支付事件，可作为兼容性事件保留，但链下统计不得仅依赖该事件。
 
 资金与配置事件：
-- `ActivityConfigured(uint256 rewardsDuration, uint256 inviteeBoost, uint256 level1, uint256 level2, uint256 level3, uint256 maxSubsidyRate, uint256 MAX_SUBSIDY_RATE, uint256 penaltyRate)`：部署时记录本活动池固定规则。锁仓档位可通过独立字段或配套事件记录。
+- `ActivityConfigured(uint256 rewardsDuration, uint256 inviteeBoost, uint256 level1, uint256 level2, uint256 level3, uint256 maxSubsidyRate, uint256 maxSubsidyRateCap, uint256 penaltyRate)`：部署时记录本活动池固定规则。锁仓档位可通过独立字段或配套事件记录。
 - `RewardAdded(uint256 baseRewardAmount, uint256 subsidyRequired, uint256 subsidyCharged)`
+- `RewardCheckpointWritten(uint256 indexed time, uint256 rewardPerToken, uint256 periodFinish, uint256 index, bool replaced)`：记录 `rewardHistory` 写入结果；`replaced == true` 表示本次写入覆盖了同一时间戳下的最后一条快照。
 - `SubsidyReserved(uint256 amount)`
 - `UnsettledMaxSubsidyLiabilityUpdated(uint256 newValue)`
 - `SubsidySwept(address indexed to, uint256 amount)`

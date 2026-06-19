@@ -2,9 +2,9 @@
 pragma solidity 0.8.28;
 
 import "forge-std/Test.sol";
-import "../src/staking.sol";
-import "../src/interface.sol";
-import "./mocks/MockERC20.sol";
+import "../../src/V1/staking.sol";
+import "../../src/V1/interface.sol";
+import "./../mocks/MockERC20.sol";
 
 contract FeeOnTransferMockERC20 is MockERC20 {
     uint256 public immutable feeBps;

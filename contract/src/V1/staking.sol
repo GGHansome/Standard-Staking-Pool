@@ -192,7 +192,6 @@ contract StakingPool is IStakingPool, AccessControl, Pausable, ReentrancyGuard {
     }
 
     function _withdraw(uint256 amount) internal {
-        // TODO: implement
         if (amount == 0) {
             revert AmountMustBeGreaterThanZero();
         }

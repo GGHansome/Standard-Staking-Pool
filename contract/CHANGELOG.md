@@ -3,6 +3,7 @@
 **2026-06-10**
 
 **PRD/V2/PRD_V2_Staking.md**
+- **统一仓位级奖励支付事件口径（对应章节：5.2、8.4）**：将 `BaseRewardPaid` 与 `InviteeBoostRewardPaid` 调整为携带 `depositId` 的仓位级事件，与 `LockBoostRewardPaid`、各类 `Accrued` 事件保持一致；`ReferralRewardPaid` 继续表示用户级推荐返佣总量，`RewardPaid` 仅作为本次 ERC20 聚合转账总额事件。
 - **补充基础奖池未支付余额账本口径（对应章节：2.3、4.1、8.3）**：明确基础奖池未支付余额由独立全局变量 `baseRewardReserve` 维护，并规定其在基础奖励注入、基础奖励结算、基础奖励支付和空窗奖励自然流失确认时的增减规则；`baseRewardReserve()` 作为链上校验口径对外暴露，`remainingBaseReward()` 仅用于展示当前周期尚未释放的基础奖励，不得作为偿付校验口径。
 - **精简并统一补贴、罚金与快照口径（对应章节：4.3、4.4、5.2、5.3、6.5、7.3）**：统一 `notifyRewardAmount` 的入参名称为 `baseRewardAmount`，补充 `subsidyCharged` 的差额计算；将自身推荐补贴统一为 `inviteeBoost` 口径，并把提前解锁罚金改为 `floor(amount * penaltyRate / BPS)`；同时压缩 `maxSubsidyBudgetDelta` 的重复说明，统一饱和扣减和 `claimAll` 表达。
 

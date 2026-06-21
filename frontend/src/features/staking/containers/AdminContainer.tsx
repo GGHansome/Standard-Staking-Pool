@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { App } from 'antd'
-import { useWaitForTransactionReceipt, useWriteContract } from 'wagmi'
+import { readContract } from 'wagmi/actions'
+import { useConfig, useWaitForTransactionReceipt, useWriteContract } from 'wagmi'
 import { isAddress, type Address } from 'viem'
 import { stakingPoolAbi } from '../../../contracts/stakingPoolAbi'
 import { AdminPanelCard } from '../components/AdminPanelCard'
@@ -9,14 +11,17 @@ import { parsePositiveBigInt } from '../utils/format'
 
 type AdminContainerProps = {
   poolAddress: Address
+  operatorRole: `0x${string}`
   isPoolPaused: boolean
 }
 
-export function AdminContainer({ poolAddress, isPoolPaused }: AdminContainerProps) {
+export function AdminContainer({ poolAddress, operatorRole, isPoolPaused }: AdminContainerProps) {
   const { message } = App.useApp()
+  const config = useConfig()
+  const [isCheckingOperator, setIsCheckingOperator] = useState(false)
   const write = useWriteContract()
   const receipt = useWaitForTransactionReceipt({ hash: write.data })
-  const disabled = write.isPending || receipt.isLoading
+  const disabled = isCheckingOperator || write.isPending || receipt.isLoading
 
   const pause = async () => {
     try {
@@ -78,13 +83,46 @@ export function AdminContainer({ poolAddress, isPoolPaused }: AdminContainerProp
     }
   }
 
+  const grantOperatorRole = async (account: string) => {
+    try {
+      if (!isAddress(account)) {
+        throw new Error('请输入有效的钱包地址')
+      }
+
+      setIsCheckingOperator(true)
+      const alreadyOperator = await readContract(config, {
+        address: poolAddress,
+        abi: stakingPoolAbi,
+        functionName: 'hasRole',
+        args: [operatorRole, account],
+      })
+      setIsCheckingOperator(false)
+
+      if (alreadyOperator) {
+        message.info('该地址已经是 Operator，无需重复添加')
+        return
+      }
+
+      await write.mutateAsync({
+        address: poolAddress,
+        abi: stakingPoolAbi,
+        functionName: 'grantRole',
+        args: [operatorRole, account],
+      })
+      message.success('添加 Operator 已提交，等待链上确认')
+    } catch (error) {
+      setIsCheckingOperator(false)
+      message.error(getErrorMessage(error))
+    }
+  }
+
   return (
     <>
       <TransactionStatusAlert
         hash={write.data}
-        error={write.error ? getErrorMessage(write.error) : undefined}
         isConfirming={receipt.isLoading}
         isConfirmed={receipt.isSuccess}
+        receiptStatus={receipt.data?.status}
       />
       <AdminPanelCard
         isPaused={isPoolPaused}
@@ -93,6 +131,7 @@ export function AdminContainer({ poolAddress, isPoolPaused }: AdminContainerProp
         onUnpause={unpause}
         onSetRewardsDuration={setRewardsDuration}
         onRecoverToken={recoverToken}
+        onGrantOperatorRole={grantOperatorRole}
       />
     </>
   )

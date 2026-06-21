@@ -49,6 +49,12 @@ export function StakeContainer({
   const stake = async (amount: string) => {
     try {
       const parsed = parseTokenAmount(amount, stakingToken.decimals)
+
+      if (stakingToken.allowance < parsed) {
+        message.warning('质押代币授权不足，请先授权质押代币')
+        return
+      }
+
       await write.mutateAsync({
         address: poolAddress,
         abi: stakingPoolAbi,
@@ -65,9 +71,9 @@ export function StakeContainer({
     <>
       <TransactionStatusAlert
         hash={write.data}
-        error={write.error ? getErrorMessage(write.error) : undefined}
         isConfirming={receipt.isLoading}
         isConfirmed={receipt.isSuccess}
+        receiptStatus={receipt.data?.status}
       />
       <AmountActionCard
         title="质押"

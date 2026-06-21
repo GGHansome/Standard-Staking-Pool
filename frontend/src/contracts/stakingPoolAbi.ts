@@ -109,6 +109,16 @@ export const stakingPoolAbi = [
   },
   {
     type: 'function',
+    name: 'grantRole',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'role', type: 'bytes32' },
+      { name: 'account', type: 'address' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
     name: 'stake',
     stateMutability: 'nonpayable',
     inputs: [{ name: 'amount', type: 'uint256' }],

@@ -4,13 +4,14 @@ import {
   formatAddress,
   formatApr,
   formatCountdown,
+  formatRewardAmount,
+  formatRewardRate,
   formatTokenAmount,
 } from '../utils/format'
 
 type PoolOverviewCardProps = {
   isPaused: boolean
   totalSupply: bigint
-  rewardRate: bigint
   rewardsDuration: bigint
   periodFinish: bigint
   apr?: number
@@ -27,7 +28,6 @@ type PoolOverviewCardProps = {
 export function PoolOverviewCard({
   isPaused,
   totalSupply,
-  rewardRate,
   rewardsDuration,
   periodFinish,
   apr,
@@ -59,22 +59,19 @@ export function PoolOverviewCard({
           <Statistic title="发奖倒计时" value={formatCountdown(periodFinish)} />
         </Col>
         <Col xs={24} md={8}>
-          <Statistic
-            title="每秒释放"
-            value={
-              rewardPerSecond === undefined
-                ? '--'
-                : `${rewardPerSecond.toLocaleString(undefined, {
-                    maximumFractionDigits: 8,
-                  })} ${rewardTokenSymbol}`
-            }
-          />
+          <Statistic title="每秒释放" value={formatRewardRate(rewardPerSecond, rewardTokenSymbol)} />
         </Col>
         <Col xs={24} md={8}>
           <Statistic title="奖励周期(秒)" value={rewardsDuration.toString()} />
         </Col>
         <Col xs={24} md={8}>
-          <Statistic title="奖励速率(链上原始值)" value={rewardRate.toString()} />
+          <Statistic
+            title="本周期释放"
+            value={formatRewardAmount(
+              rewardPerSecond === undefined ? undefined : rewardPerSecond * Number(rewardsDuration),
+              rewardTokenSymbol,
+            )}
+          />
         </Col>
       </Row>
       <Divider />

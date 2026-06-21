@@ -64,6 +64,28 @@ export function formatApr(apr?: number): string {
   return `${apr!.toFixed(2)}%`
 }
 
+function formatReadableNumber(value: number, maxFractionDigits = 8): string {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: maxFractionDigits,
+  }).format(value)
+}
+
+export function formatRewardAmount(value?: number, symbol = ''): string {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
+  return `${formatReadableNumber(value!)} ${symbol}`.trim()
+}
+
+export function formatRewardRate(value?: number, symbol = ''): string {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
+  return `${formatReadableNumber(value!)} ${symbol}/秒`.trim()
+}
+
 export function formatCountdown(periodFinish: bigint): string {
   const finishMs = Number(periodFinish) * 1000
   if (!Number.isFinite(finishMs) || finishMs <= Date.now()) {

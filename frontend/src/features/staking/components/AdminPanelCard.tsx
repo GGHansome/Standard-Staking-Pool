@@ -10,6 +10,10 @@ type RecoverFormValues = {
   rawAmount: string
 }
 
+type OperatorFormValues = {
+  account: string
+}
+
 type AdminPanelCardProps = {
   isPaused: boolean
   disabled: boolean
@@ -17,6 +21,7 @@ type AdminPanelCardProps = {
   onUnpause: () => Promise<void>
   onSetRewardsDuration: (seconds: string) => Promise<void>
   onRecoverToken: (tokenAddress: string, rawAmount: string) => Promise<void>
+  onGrantOperatorRole: (account: string) => Promise<void>
 }
 
 export function AdminPanelCard({
@@ -26,9 +31,11 @@ export function AdminPanelCard({
   onUnpause,
   onSetRewardsDuration,
   onRecoverToken,
+  onGrantOperatorRole,
 }: AdminPanelCardProps) {
   const [durationForm] = Form.useForm<DurationFormValues>()
   const [recoverForm] = Form.useForm<RecoverFormValues>()
+  const [operatorForm] = Form.useForm<OperatorFormValues>()
 
   const setDuration = async () => {
     const values = await durationForm.validateFields()
@@ -38,6 +45,11 @@ export function AdminPanelCard({
   const recover = async () => {
     const values = await recoverForm.validateFields()
     await onRecoverToken(values.tokenAddress, values.rawAmount)
+  }
+
+  const grantOperatorRole = async () => {
+    const values = await operatorForm.validateFields()
+    await onGrantOperatorRole(values.account)
   }
 
   return (
@@ -78,6 +90,18 @@ export function AdminPanelCard({
             onClick={() => void setDuration()}
           >
             设置奖励周期
+          </Button>
+        </Form>
+        <Form form={operatorForm} layout="vertical">
+          <Form.Item
+            label="Operator 钱包地址"
+            name="account"
+            rules={[{ required: true, message: '请输入要添加的 Operator 地址' }]}
+          >
+            <Input placeholder="0x..." disabled={disabled} />
+          </Form.Item>
+          <Button type="primary" disabled={disabled} onClick={() => void grantOperatorRole()}>
+            添加 Operator
           </Button>
         </Form>
         <Form form={recoverForm} layout="vertical">

@@ -45,9 +45,9 @@ export function WithdrawContainer({
     <>
       <TransactionStatusAlert
         hash={write.data}
-        error={write.error ? getErrorMessage(write.error) : undefined}
         isConfirming={receipt.isLoading}
         isConfirmed={receipt.isSuccess}
+        receiptStatus={receipt.data?.status}
       />
       <AmountActionCard
         title="提取本金"

@@ -47,6 +47,12 @@ export function OperatorRewardContainer({
   const notifyReward = async (amount: string) => {
     try {
       const parsed = parseTokenAmount(amount, rewardToken.decimals)
+
+      if (rewardToken.allowance < parsed) {
+        message.warning('奖励代币授权不足，请先授权奖励代币')
+        return
+      }
+
       await write.mutateAsync({
         address: poolAddress,
         abi: stakingPoolAbi,
@@ -63,9 +69,9 @@ export function OperatorRewardContainer({
     <>
       <TransactionStatusAlert
         hash={write.data}
-        error={write.error ? getErrorMessage(write.error) : undefined}
         isConfirming={receipt.isLoading}
         isConfirmed={receipt.isSuccess}
+        receiptStatus={receipt.data?.status}
       />
       <AmountActionCard
         title="Operator 奖励注入"

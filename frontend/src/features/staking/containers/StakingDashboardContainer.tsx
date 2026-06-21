@@ -247,7 +247,6 @@ export function StakingDashboardContainer() {
           <PoolOverviewCard
             isPaused={pool.paused}
             totalSupply={pool.totalSupply}
-            rewardRate={pool.rewardRate}
             rewardsDuration={pool.rewardsDuration}
             periodFinish={pool.periodFinish}
             apr={pool.apr}
@@ -306,7 +305,11 @@ export function StakingDashboardContainer() {
             />
           ) : null}
           {adminRoleRead.data ? (
-            <AdminContainer poolAddress={poolAddress} isPoolPaused={pool.paused} />
+            <AdminContainer
+              poolAddress={poolAddress}
+              operatorRole={operatorRole}
+              isPoolPaused={pool.paused}
+            />
           ) : null}
         </>
       )}

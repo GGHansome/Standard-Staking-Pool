@@ -43,6 +43,7 @@
 - `test_NotifyRewardAmount_RevertWhenRewardTransferIsNotExact`：奖励 token 实际到账少于请求数量时失败，覆盖 fee-on-transfer 风险。
 - `test_NotifyRewardAmount_StartsNewRewardPeriod`：首次注入后设置 `rewardRate`、`lastUpdateTime`、`periodFinish`。
 - `test_NotifyRewardAmount_IncreasesBaseReserveAndSubsidyLiability`：注入后增加 `baseRewardReserve`、`subsidyReserve`、`unsettledMaxSubsidyLiability`。
+- `test_NotifyRewardAmount_EmitsUnsettledLiabilityIncrease`：注入新增基础奖励并增加最大补贴预算时，应抛出 `UnsettledMaxSubsidyLiabilityUpdated` 事件。
 - `test_NotifyRewardAmount_UsesSweepableSubsidyBeforeChargingMore`：新周期优先复用沉淀补贴，只补缴缺口。
 - `test_NotifyRewardAmount_CarriesLeftoverWhenPeriodActive`：周期未结束时续奖应把剩余基础奖励并入新释放曲线。
 - `test_NotifyRewardAmount_LeftoverDoesNotIncreaseBaseReserveAgain`：续奖时上一期 `leftoverBase` 重新进入释放曲线，不应再次增加 `baseRewardReserve`。
@@ -80,6 +81,7 @@
 - `test_Referral_RevertWhenInviterIsSelfOrUnset`：邀请人不能是自己，且必须已完成首次质押状态。
 - `test_Referral_RevertWhenCycleDetectedWithinThreeLevels`：三级链路内形成循环时失败。
 - `test_Referral_GetUplineReturnsThreeLevels`：三级上级查询返回直接、二级、三级上级，超过三级不展示。
+- `test_Referral_DisabledReferralIgnoresInvalidInviterAndDoesNotBind`：推荐费率全为 0 时，`stake` 应完全忽略 `inviter` 参数；即使传入自己或未绑定用户也不应失败，且不写入 `hasSetInviter` / `inviterOf`。
 
 ## 7. 基础奖励与补贴计提
 
@@ -88,13 +90,15 @@
 - `test_AccrueReward_NewDepositDoesNotReceivePastRewards`：新仓位不获得创建前已释放奖励。
 - `test_AccrueReward_ClosedDepositStopsReceivingFutureRewards`：关闭仓位不再获得未来奖励。
 - `test_AccrueReward_UpdatesDepositWatermarkAndPendingBase`：结算后仓位水位线和待领取基础奖励更新。
-- `test_AccrueReward_ReducesUnsettledLiabilityByMaxSubsidyDelta`：基础奖励实际结算后冲减对应最大理论补贴预算。
+- `test_AccrueReward_ReducesUnsettledLiabilityByMaxSubsidyDelta`：基础奖励实际结算后冲减对应最大理论补贴预算，并抛出未结算最大补贴负债更新事件。
+- `test_AccrueReward_EmptyPoolNaturalAttritionEmitsUnsettledLiabilityUpdate`：空窗自然流失释放最大补贴预算时，应抛出未结算最大补贴负债更新事件。
 - `test_AccrueReward_TotalPendingSubsidyTracksActualSubsidies`：已确认补贴负债等于实际计提的自身补贴、锁仓补贴和推荐返佣。
 
 ## 8. 推荐补贴与三级返佣
 
 - `test_ReferralReward_NoUplineAccruesNoReferralReward`：无上级用户产生基础奖励时不产生推荐返佣。
 - `test_ReferralReward_AccruesLevel1Level2Level3`：三级上级分别按配置比例获得推荐返佣。
+- `test_ReferralReward_AccrualEmitsRewardTypeEvents`：自身推荐补贴和三级推荐返佣计提时，应按奖励类型抛出独立事件。
 - `test_ReferralReward_DoesNotAccrueBeyondLevel3`：四级及以上不获得返佣。
 - `test_ReferralReward_ZeroLevelRateStopsExpectedLevel`：某一级比例为 0 时，对应层级不产生返佣。
 - `test_ReferralReward_ClaimableReferralRewardUpdatesAfterAccrualAndClaim`：推荐返佣计提后可查询，领取后清零。
@@ -111,11 +115,14 @@
 - `test_LockBoost_UsesRewardPerTokenAtUnlockInterpolation`：到期点位于快照之间时使用线性插值计算 boost 截止水位线。
 - `test_LockBoost_ClampsInterpolationAtPeriodFinish`：到期晚于奖励结束时按 `periodFinish` 截断。
 - `test_LockBoost_ResumesAfterCrossPeriodNotifyBeforeUnlock`：锁仓期跨越旧周期结束，若到期前续奖，剩余锁仓期应继续按仓位 `boostRate` 计提加速奖励。
-- `test_PRD_EarnedByDepositAfterUnlockBeforeStateUpdateShowsClaimableBoost`：PRD 一致性：只读查询到期但未交互仓位时，应临时展示可领取 boost。
+- `test_PRD_EarnedByDepositAfterUnlockBeforeStateUpdateShowsClaimableBoost`：PRD 一致性：只读查询到期但未交互仓位时，应使用虚拟当前快照临时展示可领取 boost。
+- `test_PRD_EarnedByDepositMatureBoostMatchesNextClaimAllPayout`：PRD 一致性：到期但未状态结算仓位的 `earnedByDeposit` mature boost 展示值，应等于下一次 `claimAll` 实际支付的锁仓加速奖励。
+- `test_LockBoost_MaturitySettlementRunsWhenRewardDeltaIsZero`：锁仓到期时即使本次基础奖励增量为 0，也应完成到期切分并开放已累计 boost。
 
 ## 10. claimAll 领取奖励
 
 - `test_EarnedAndEarnedByDeposit_ReturnExpectedClaimableBreakdown`：领取前只读查询应正确拆分基础奖励、自身补贴、推荐返佣、可领取 boost 和不可领取 boost。
+- `test_PRD_EarnedMatchesNextClaimAllPayoutBeforeSettlementWithInviter`：PRD 一致性：用户有邀请人且尚未触发状态结算时，`earned(user)` 应等于下一次 `claimAll` 对该用户的实际支付金额。
 - `test_ClaimAll_PaysBaseInviteeBoostReferralAndMatureBoost`：一次领取基础奖励、自身补贴、推荐返佣、已到期 boost。
 - `test_ClaimAll_DoesNotPayUnmaturedBoost`：未到期 boost 不应被支付。
 - `test_ClaimAll_ReducesBaseReserveSubsidyReserveAndPendingSubsidy`：支付后基础奖池、补贴备付金、已确认补贴负债正确扣减。
@@ -130,7 +137,8 @@
 - `test_Withdraw_MatureLockedDepositReturnsFullPrincipalAndPaysRewards`：已到期锁仓退出返还本金并支付可领取奖励。
 - `test_Withdraw_EarlyLockedDepositAppliesPenaltyAndPaysTreasury`：未到期锁仓提前退出扣罚金并转给 treasury。
 - `test_Withdraw_EarlyLockedDepositForfeitsUnmaturedBoost`：提前退出罚没未到期 boost，减少 `totalPendingSubsidy` 但不减少 `subsidyReserve`。
-- `test_Withdraw_PaysBaseInviteeAndReferralRewards`：退出时支付该仓位奖励，并领取调用者推荐返佣。
+- `test_Withdraw_PaysBaseInviteeAndReferralRewards`：退出时支付该仓位基础奖励和自身推荐补贴，并保证该仓位产生的上级推荐返佣可由上级单独领取。
+- `test_ReferralReward_WithdrawDoesNotClaimUserLevelReferralReward`：`withdraw` 只关闭指定仓位，不应顺带领取调用者的用户级推荐返佣。
 - `test_Withdraw_RemovesDepositFromActiveListAndUpdatesTotals`：退出后活跃列表、用户本金、总供应正确更新。
 - `test_Withdraw_WritesRewardCheckpoint`：退出改变总供应，应写入奖励快照。
 
@@ -140,7 +148,9 @@
 - `test_WithdrawMultiple_WithdrawsMixedDepositsAndAggregatesAccounting`：批量退出活期、已到期锁仓、未到期锁仓，汇总本金、罚金和奖励。
 - `test_WithdrawMultiple_RemovesOnlySpecifiedDeposits`：只移除指定仓位，未指定仓位保持活跃。
 - `test_WithdrawMultiple_EmitsPerDepositEvents`：即使转账聚合执行，也应为每个被退出的 `depositId` 抛出独立事件，供链下索引器按仓位统计。
+- `test_ReferralReward_WithdrawMultipleDoesNotClaimUserLevelReferralReward`：`withdrawMultiple` 只关闭指定仓位集合，不应顺带领取调用者的用户级推荐返佣。
 - `test_Exit_WithNoDepositsStillClaimsReferralReward`：无活跃仓位但有推荐返佣时，`exit` 仍可领取。
+- `test_Exit_WithOnlyReferralRewardDoesNotWriteCheckpoint`：仅领取用户级推荐返佣、不关闭任何活跃仓位时，`exit` 不应写入 `RewardCheckpointWritten`。
 - `test_Exit_WithdrawsAllActiveDepositsAndDoesNotAffectOthers`：退出调用者全部仓位，不影响其他用户。
 - `test_Exit_DoesNotSkipDepositsWhenActiveListShrinksDuringLoop`：实现风险：遍历退出时不应因为列表缩短跳过仓位。
 
@@ -194,6 +204,7 @@
 
 - `test_Stake_AllowsRestakeAfterWithdrawBelowLimit`：退出一个仓位后可再次创建仓位。
 - `test_Stake_ActiveDepositLimitIsPerUser`：仓位上限按用户独立计算。
+- `test_PRD_MaxActiveDepositsLimitIsSharedByPrdGetterAndFrontendCopy`：PRD、合约 getter、测试断言和前端提示文案应使用同一个确定上限值 `50`，避免展示和链上限制漂移。
 - `test_Stake_CheckpointReplacedWithinSameTimestampAndAppendedLater`：同时间戳覆盖快照，不同时间戳追加快照。
 - `test_GetUserDeposits_ReturnsOnlyActiveDeposits`：用户仓位列表只返回活跃仓位。
 - `test_GetDeposit_DistinguishesNonexistentActiveAndClosed`：`getDeposit` 应可通过 `owner != 0 && amount == 0` 推导已关闭仓位，区分不存在、活跃、已关闭三态。

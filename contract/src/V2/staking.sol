@@ -29,7 +29,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     uint256 public constant override BPS = 10_000;
 
     /// @notice 单个用户最多允许保留的活跃质押仓位数量。
-    uint256 public constant override MAX_ACTIVE_DEPOSITS = 30;
+    uint256 public constant override MAX_ACTIVE_DEPOSITS = 50;
 
     /// @notice 最多允许配置的锁仓档位数量。
     uint256 public constant override MAX_LOCK_TIERS = 10;
@@ -472,7 +472,6 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     /// @inheritdoc IStakingPoolV2
     function withdraw(uint256 depositId) external override nonReentrant updateReward(msg.sender) assertAssetCoverage {
         WithdrawAccounting memory accounting = _withdrawDepositToAccounting(msg.sender, depositId);
-        accounting.rewardPaid += _claimReferralReward(msg.sender);
         _writeRewardCheckpoint();
         _payWithdrawAccounting(msg.sender, accounting);
     }
@@ -491,7 +490,6 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         for (uint256 i = 0; i < depositIds.length; ++i) {
             _mergeWithdrawAccounting(accounting, _withdrawDepositToAccounting(msg.sender, depositIds[i]));
         }
-        accounting.rewardPaid += _claimReferralReward(msg.sender);
         _writeRewardCheckpoint();
         _payWithdrawAccounting(msg.sender, accounting);
     }
@@ -504,7 +502,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
             _mergeWithdrawAccounting(accounting, _withdrawDepositToAccounting(msg.sender, ids[i]));
         }
         accounting.rewardPaid += _claimReferralReward(msg.sender);
-        _writeRewardCheckpoint();
+        if (ids.length > 0) {
+            _writeRewardCheckpoint();
+        }
         _payWithdrawAccounting(msg.sender, accounting);
     }
 
@@ -615,8 +615,12 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         if (totalSupply == 0 && applicableTime > lastUpdateTime) {
             uint256 naturalAttritionReward = Math.mulDiv(rewardRate, applicableTime - lastUpdateTime, PRECISION);
             uint256 maxSubsidyBudgetDelta = _proportionalBpsReward(naturalAttritionReward, maxSubsidyRate);
+            uint256 liabilityDeducted = Math.min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability);
             baseRewardReserve -= Math.min(naturalAttritionReward, baseRewardReserve);
-            unsettledMaxSubsidyLiability -= Math.min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability);
+            if (liabilityDeducted > 0) {
+                unsettledMaxSubsidyLiability -= liabilityDeducted;
+                emit UnsettledMaxSubsidyLiabilityUpdated(unsettledMaxSubsidyLiability);
+            }
         }
 
         rewardPerTokenStored = rewardPerToken();
@@ -677,7 +681,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
             paid += depositInviteeBoostPaid;
         }
 
-        if (_isBoostClaimable(deposit)) {
+        if (deposit.pendingBoostReward > 0 && deposit.boostSettled) {
             uint256 depositBoostPaid = deposit.pendingBoostReward;
             deposit.pendingBoostReward = 0;
             subsidyReserve -= depositBoostPaid;
@@ -796,34 +800,42 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         if (deposit.amount == 0) {
             return;
         }
-        uint256 depositRewardPerTokenPaid = deposit.rewardPerTokenPaid;
-        uint256 delta = rewardPerTokenStored - depositRewardPerTokenPaid;
 
-        if (delta == 0) {
-            return;
-        }
-        uint256 baseReward = Math.mulDiv(deposit.amount, delta, PRECISION);
-        uint256 maxSubsidyDelta = _proportionalBpsReward(baseReward, maxSubsidyRate);
+        uint256 depositRewardPerTokenPaid = deposit.rewardPerTokenPaid;
+        uint256 baseReward = Math.mulDiv(deposit.amount,rewardPerTokenStored - depositRewardPerTokenPaid,PRECISION);
+        uint256 boostReward = _accrueLockBoostReward(deposit, baseReward, depositRewardPerTokenPaid);
+
         if (baseReward == 0) {
+            if (boostReward > 0) {
+                totalPendingSubsidy += boostReward;
+                emit LockBoostRewardAccrued(deposit.owner, depositId, boostReward);
+            }
             return;
         }
+
         uint256 inviteeBoostReward = 0;
         if (hasSetInviter[deposit.owner] && inviterOf[deposit.owner] != address(0)) {
             inviteeBoostReward = _proportionalBpsReward(baseReward, inviteeBoost);
         }
-        uint256 subsidyReward = inviteeBoostReward;
+        uint256 referralReward = _accrueReferralRewards(deposit.owner, depositId, baseReward);
+        uint256 subsidyReward = inviteeBoostReward + referralReward + boostReward;
+        uint256 maxSubsidyDelta = _proportionalBpsReward(baseReward, maxSubsidyRate);
+
         deposit.pendingBaseReward += baseReward;
         deposit.rewardPerTokenPaid = rewardPerTokenStored;
         deposit.pendingInviteeBoostReward += inviteeBoostReward;
 
-        subsidyReward += _accrueReferralRewards(deposit.owner, baseReward);
-
-        uint256 boostReward = _accrueLockBoostReward(deposit, baseReward, depositRewardPerTokenPaid);
-        subsidyReward += boostReward;
-
         totalPendingSubsidy += subsidyReward;
-        unsettledMaxSubsidyLiability -= Math.min(maxSubsidyDelta, unsettledMaxSubsidyLiability);
 
+        uint256 liabilityDeducted = Math.min(maxSubsidyDelta, unsettledMaxSubsidyLiability);
+        if (liabilityDeducted > 0) {
+            unsettledMaxSubsidyLiability -= liabilityDeducted;
+            emit UnsettledMaxSubsidyLiabilityUpdated(unsettledMaxSubsidyLiability);
+        }
+
+        if (inviteeBoostReward > 0) {
+            emit InviteeBoostRewardAccrued(deposit.owner, depositId, inviteeBoostReward);
+        }
         if (boostReward > 0) {
             emit LockBoostRewardAccrued(deposit.owner, depositId, boostReward);
         }
@@ -836,9 +848,14 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
 
     /// @notice 根据用户的三级上级关系归集推荐奖励。
     /// @param user 产生奖励来源的用户地址。
+    /// @param sourceDepositId 产生奖励来源的质押仓位编号。
     /// @param baseReward 本次基础奖励数量。
     /// @return referralSubsidyReward 本次归集到推荐体系的补贴奖励总额。
-    function _accrueReferralRewards(address user, uint256 baseReward) internal returns (uint256 referralSubsidyReward) {
+    function _accrueReferralRewards(
+        address user,
+        uint256 sourceDepositId,
+        uint256 baseReward
+    ) internal returns (uint256 referralSubsidyReward) {
         address uplineLevel1 = inviterOf[user];
         if (uplineLevel1 == address(0) || level1 == 0) {
             return 0;
@@ -847,6 +864,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         uint256 referralReward = _proportionalBpsReward(baseReward, level1);
         referralRewards[uplineLevel1] += referralReward;
         referralSubsidyReward += referralReward;
+        if (referralReward > 0) {
+            emit ReferralRewardAccrued(uplineLevel1, user, 1, sourceDepositId, referralReward);
+        }
 
         address uplineLevel2 = inviterOf[uplineLevel1];
         if (uplineLevel2 == address(0) || level2 == 0) {
@@ -856,6 +876,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         referralReward = _proportionalBpsReward(baseReward, level2);
         referralRewards[uplineLevel2] += referralReward;
         referralSubsidyReward += referralReward;
+        if (referralReward > 0) {
+            emit ReferralRewardAccrued(uplineLevel2, user, 2, sourceDepositId, referralReward);
+        }
 
         address uplineLevel3 = inviterOf[uplineLevel2];
         if (uplineLevel3 == address(0) || level3 == 0) {
@@ -865,6 +888,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         referralReward = _proportionalBpsReward(baseReward, level3);
         referralRewards[uplineLevel3] += referralReward;
         referralSubsidyReward += referralReward;
+        if (referralReward > 0) {
+            emit ReferralRewardAccrued(uplineLevel3, user, 3, sourceDepositId, referralReward);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -912,6 +938,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     /// @param user 被绑定邀请关系的用户地址。
     /// @param inviter 用户提交的邀请人地址。
     function _settleInviter(address user, address inviter) internal {
+        if (!_isReferralEnabled()) {
+            return;
+        }
         if (hasSetInviter[user]) {
             return;
         }
@@ -929,6 +958,12 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         }
         inviterOf[user] = inviter;
         emit InviterBound(user, inviter);
+    }
+
+    /// @notice 查询推荐模块是否启用。
+    /// @return enabled 任意推荐费率非零时视为启用。
+    function _isReferralEnabled() internal view returns (bool enabled) {
+        enabled = inviteeBoost != 0 || level1 != 0 || level2 != 0 || level3 != 0;
     }
 
     // ---------------------------------------------------------------------
@@ -974,13 +1009,14 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         RewardCheckpoint storage last = rewardHistory[length - 1];
         if (targetTime >= last.time) {
             cp2Time = lastTimeRewardApplicable();
+            uint256 currentRewardPerToken = rewardPerToken();
             if (targetTime >= cp2Time) {
-                return rewardPerTokenStored;
+                return currentRewardPerToken;
             }
             cp1Time = last.time;
             cp1Reward = last.rewardPerToken;
             cp1PeriodFinish = last.periodFinish;
-            cp2Reward = rewardPerTokenStored;
+            cp2Reward = currentRewardPerToken;
         } else {
             uint256 low = 0;
             uint256 high = length - 1;
@@ -1022,28 +1058,74 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     /// @param deposit 仓位内部记录。
     /// @return reward 仓位奖励视图。
     function _earnedByDeposit(DepositRecord storage deposit) internal view returns (DepositRewardView memory reward) {
-        uint256 baseReward = deposit.pendingBaseReward;
-        if (deposit.amount > 0) {
-            baseReward += (deposit.amount * (rewardPerToken() - deposit.rewardPerTokenPaid)) / PRECISION;
+        uint256 currentRewardPerToken = rewardPerToken();
+        uint256 baseRewardDelta = 0;
+        if (deposit.amount > 0 && currentRewardPerToken > deposit.rewardPerTokenPaid) {
+            baseRewardDelta = Math.mulDiv(deposit.amount, currentRewardPerToken - deposit.rewardPerTokenPaid, PRECISION);
         }
-        bool boostClaimable = _isBoostClaimable(deposit);
-        uint256 claimableBoost = boostClaimable ? deposit.pendingBoostReward : 0;
+
+        uint256 baseReward = deposit.pendingBaseReward + baseRewardDelta;
+        uint256 inviteeBoostReward = deposit.pendingInviteeBoostReward;
+        if (baseRewardDelta > 0 && hasSetInviter[deposit.owner] && inviterOf[deposit.owner] != address(0)) {
+            inviteeBoostReward += _proportionalBpsReward(baseRewardDelta, inviteeBoost);
+        }
+
+        (uint256 pendingBoostReward, uint256 claimableBoost, bool boostClaimable) =
+            _boostRewardView(deposit);
+
         reward = DepositRewardView({
             baseReward: baseReward,
-            inviteeBoostReward: deposit.pendingInviteeBoostReward,
-            pendingBoostReward: deposit.pendingBoostReward,
+            inviteeBoostReward: inviteeBoostReward,
+            pendingBoostReward: pendingBoostReward,
             claimableBoostReward: claimableBoost,
-            totalClaimable: baseReward + deposit.pendingInviteeBoostReward + claimableBoost,
+            totalClaimable: baseReward + inviteeBoostReward + claimableBoost,
             boostClaimable: boostClaimable,
             boostForfeitable: deposit.boostRate > 0 && deposit.amount > 0 && deposit.unlockTime > block.timestamp
         });
     }
 
-    /// @notice 判断单笔仓位的锁仓加成当前是否可领取。
+    /// @notice 计算单笔仓位只读上下文中的锁仓加成展示值。
     /// @param deposit 仓位内部记录。
-    /// @return 是否可领取锁仓加成奖励。
-    function _isBoostClaimable(DepositRecord storage deposit) internal view returns (bool) {
-        return deposit.pendingBoostReward > 0 && (deposit.boostSettled || (deposit.unlockTime != 0 && block.timestamp >= deposit.unlockTime));
+    /// @return pendingBoostReward 已落盘和本次虚拟计算合并后的锁仓加成奖励。
+    /// @return claimableBoostReward 当前可领取的锁仓加成奖励。
+    /// @return boostClaimable 当前是否存在可领取锁仓加成奖励。
+    function _boostRewardView(
+        DepositRecord storage deposit
+    ) internal view returns (uint256 pendingBoostReward, uint256 claimableBoostReward, bool boostClaimable) {
+        pendingBoostReward = deposit.pendingBoostReward;
+        if (deposit.boostRate == 0) {
+            return (pendingBoostReward, 0, false);
+        }
+
+        if (deposit.boostSettled) {
+            boostClaimable = pendingBoostReward > 0;
+            claimableBoostReward = boostClaimable ? pendingBoostReward : 0;
+            return (pendingBoostReward, claimableBoostReward, boostClaimable);
+        }
+
+        if (deposit.amount == 0) {
+            return (pendingBoostReward, 0, false);
+        }
+
+        uint256 boostRewardPerToken = rewardPerToken();
+        bool mature = deposit.unlockTime != 0 && block.timestamp >= deposit.unlockTime;
+        if (mature) {
+            boostRewardPerToken = _rewardPerTokenAt(deposit.unlockTime);
+        }
+
+        if (boostRewardPerToken > deposit.rewardPerTokenPaid) {
+            uint256 boostBaseReward = Math.mulDiv(
+                deposit.amount,
+                boostRewardPerToken - deposit.rewardPerTokenPaid,
+                PRECISION
+            );
+            pendingBoostReward += _proportionalBpsReward(boostBaseReward, deposit.boostRate);
+        }
+
+        if (mature) {
+            boostClaimable = pendingBoostReward > 0;
+            claimableBoostReward = pendingBoostReward;
+        }
     }
 
     /// @notice 将内部仓位记录转换为对外视图。

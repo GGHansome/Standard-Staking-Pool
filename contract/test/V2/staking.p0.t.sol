@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import "./staking.base.t.sol";
 
 contract V2StakingPoolP0Test is V2StakingPoolBase {
+    event UnsettledMaxSubsidyLiabilityUpdated(uint256 newValue);
 
     // ------------------------------------------------------------------
     // 1. 部署参数与初始化
@@ -268,6 +269,13 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertEq(pool.baseRewardReserve(), 1_000 ether);
         assertEq(pool.subsidyReserve(), _expectedSubsidy(1_000 ether));
         assertEq(pool.unsettledMaxSubsidyLiability(), _expectedSubsidy(1_000 ether));
+    }
+
+    function test_NotifyRewardAmount_EmitsUnsettledLiabilityIncrease() public {
+        uint256 expectedLiability = _expectedSubsidy(1_000 ether);
+        vm.expectEmit(false, false, false, true, address(pool));
+        emit UnsettledMaxSubsidyLiabilityUpdated(expectedLiability);
+        _notify(1_000 ether);
     }
 
     function test_NotifyRewardAmount_UsesSweepableSubsidyBeforeChargingMore() public {
@@ -541,6 +549,27 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertEq(l3, user2);
     }
 
+    function test_Referral_DisabledReferralIgnoresInvalidInviterAndDoesNotBind() public {
+        StakingPoolTypes.ConstructorParams memory params = _defaultParams(address(stakingToken), address(rewardToken));
+        params.inviteeBoost = 0;
+        params.level1 = 0;
+        params.level2 = 0;
+        params.level3 = 0;
+        params.maxSubsidyRateCap = LONG_BOOST;
+        StakingPool disabledReferralPool = _deployWithParams(params);
+        _fundAndApproveDefault(disabledReferralPool, stakingToken, rewardToken);
+
+        vm.prank(user1);
+        disabledReferralPool.stake(100 ether, 0, user1);
+        vm.prank(user2);
+        disabledReferralPool.stake(100 ether, 0, user3);
+
+        assertFalse(disabledReferralPool.hasSetInviter(user1));
+        assertFalse(disabledReferralPool.hasSetInviter(user2));
+        assertEq(disabledReferralPool.inviterOf(user1), address(0));
+        assertEq(disabledReferralPool.inviterOf(user2), address(0));
+    }
+
     // ------------------------------------------------------------------
     // 7. 基础奖励与补贴计提
     // ------------------------------------------------------------------
@@ -594,11 +623,27 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
     }
 
     function test_AccrueReward_ReducesUnsettledLiabilityByMaxSubsidyDelta() public {
-        _stake(user1, 100 ether, 0, address(0));
+        uint256 depositId = _stake(user1, 100 ether, 0, address(0));
         _notify(1_000 ether);
         vm.warp(block.timestamp + 1 days);
+        uint256 accruedBaseReward = pool.earnedByDeposit(depositId).baseReward;
+        uint256 expectedLiability = pool.unsettledMaxSubsidyLiability() - _expectedSubsidy(accruedBaseReward);
+        vm.expectEmit(false, false, false, true, address(pool));
+        emit UnsettledMaxSubsidyLiabilityUpdated(expectedLiability);
         _claim(user1);
-        assertApproxEqAbs(pool.unsettledMaxSubsidyLiability(), _expectedSubsidy(900 ether), ROUNDING_TOLERANCE);
+        assertEq(pool.unsettledMaxSubsidyLiability(), expectedLiability);
+    }
+
+    function test_AccrueReward_EmptyPoolNaturalAttritionEmitsUnsettledLiabilityUpdate() public {
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+        IStakingPoolV2Types.RewardScheduleView memory schedule = pool.getRewardSchedule();
+        uint256 naturalAttritionReward = (schedule.rewardRate * 1 days) / 1e18;
+        uint256 expectedLiability = pool.unsettledMaxSubsidyLiability() - _expectedSubsidy(naturalAttritionReward);
+        vm.expectEmit(false, false, false, true, address(pool));
+        emit UnsettledMaxSubsidyLiabilityUpdated(expectedLiability);
+        _stake(user1, 100 ether, 0, address(0));
+        assertEq(pool.unsettledMaxSubsidyLiability(), expectedLiability);
     }
 
     function test_AccrueReward_TotalPendingSubsidyTracksActualSubsidies() public {
@@ -635,6 +680,34 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertApproxEqAbs(pool.claimableReferralReward(user3), (expectedBaseReward * LEVEL1) / BPS, ROUNDING_TOLERANCE);
         assertApproxEqAbs(pool.claimableReferralReward(user2), (expectedBaseReward * LEVEL2) / BPS, ROUNDING_TOLERANCE);
         assertApproxEqAbs(pool.claimableReferralReward(user1), (expectedBaseReward * LEVEL3) / BPS, ROUNDING_TOLERANCE);
+    }
+
+    function test_ReferralReward_AccrualEmitsRewardTypeEvents() public {
+        _stake(user1, 100 ether, 0, address(0));
+        _stake(user2, 100 ether, 0, user1);
+        _stake(user3, 100 ether, 0, user2);
+        uint256 sourceDepositId = _stake(user4, 100 ether, 0, user3);
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+
+        IStakingPoolV2Types.DepositRewardView memory reward = pool.earnedByDeposit(sourceDepositId);
+        uint256 expectedBaseReward = reward.baseReward;
+        uint256 expectedInviteeBoostReward = (expectedBaseReward * INVITEE_BOOST) / BPS;
+        uint256 expectedLevel1Reward = (expectedBaseReward * LEVEL1) / BPS;
+        uint256 expectedLevel2Reward = (expectedBaseReward * LEVEL2) / BPS;
+        uint256 expectedLevel3Reward = (expectedBaseReward * LEVEL3) / BPS;
+
+        vm.expectEmit(true, true, false, true, address(pool));
+        emit InviteeBoostRewardAccrued(user4, sourceDepositId, expectedInviteeBoostReward);
+        vm.expectEmit(true, true, true, true, address(pool));
+        emit ReferralRewardAccrued(user3, user4, 1, sourceDepositId, expectedLevel1Reward);
+        vm.expectEmit(true, true, true, true, address(pool));
+        emit ReferralRewardAccrued(user2, user4, 2, sourceDepositId, expectedLevel2Reward);
+        vm.expectEmit(true, true, true, true, address(pool));
+        emit ReferralRewardAccrued(user1, user4, 3, sourceDepositId, expectedLevel3Reward);
+        vm.expectEmit(true, true, false, true, address(pool));
+        emit BaseRewardAccrued(user4, sourceDepositId, expectedBaseReward);
+        _claim(user4);
     }
 
     function test_ReferralReward_DoesNotAccrueBeyondLevel3() public {
@@ -680,6 +753,36 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertApproxEqAbs(pool.claimableReferralReward(user1), 5 ether, ROUNDING_TOLERANCE);
         _claim(user1);
         assertEq(pool.claimableReferralReward(user1), 0);
+    }
+
+    function test_ReferralReward_WithdrawDoesNotClaimUserLevelReferralReward() public {
+        uint256 depositId = _stake(user1, 100 ether, 0, address(0));
+        _stake(user2, 100 ether, 0, user1);
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+        _claim(user2);
+
+        uint256 referralBeforeWithdraw = pool.claimableReferralReward(user1);
+        assertGt(referralBeforeWithdraw, 0);
+        _withdraw(user1, depositId);
+        assertEq(pool.claimableReferralReward(user1), referralBeforeWithdraw);
+
+        _claim(user1);
+        assertEq(pool.claimableReferralReward(user1), 0);
+    }
+
+    function test_ReferralReward_WithdrawMultipleDoesNotClaimUserLevelReferralReward() public {
+        uint256 depositId1 = _stake(user1, 100 ether, 0, address(0));
+        uint256 depositId2 = _stake(user1, 50 ether, 0, address(0));
+        _stake(user2, 100 ether, 0, user1);
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+        _claim(user2);
+
+        uint256 referralBeforeWithdraw = pool.claimableReferralReward(user1);
+        assertGt(referralBeforeWithdraw, 0);
+        _withdrawMultiple(user1, _pair(depositId1, depositId2));
+        assertEq(pool.claimableReferralReward(user1), referralBeforeWithdraw);
     }
 
     function test_PRD_InviteeBoostOnlyAccruesForUsersWithValidInviter() public {
@@ -787,13 +890,51 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
 
     function test_PRD_EarnedByDepositAfterUnlockBeforeStateUpdateShowsClaimableBoost() public {
         _notify(1_000 ether);
-        uint256 d1 = _stake(user1, 100 ether, SHORT_LOCK, address(0));
-        vm.warp(block.timestamp + 1 days);
-        _stake(user1, 1 ether, 0, address(0));
+        uint256 d1 = _stake(user1, 100 ether, LONG_LOCK, address(0));
         vm.warp(pool.getDeposit(d1).unlockTime);
+        IStakingPoolV2Types.DepositView memory depositBefore = pool.getDeposit(d1);
+        assertFalse(depositBefore.boostSettled);
+
         IStakingPoolV2Types.DepositRewardView memory reward = pool.earnedByDeposit(d1);
         assertTrue(reward.boostClaimable);
         assertGt(reward.claimableBoostReward, 0);
+        assertEq(reward.pendingBoostReward, reward.claimableBoostReward);
+    }
+
+    function test_PRD_EarnedByDepositMatureBoostMatchesNextClaimAllPayout() public {
+        _notify(1_000 ether);
+        uint256 d1 = _stake(user1, 100 ether, LONG_LOCK, address(0));
+        vm.warp(pool.getDeposit(d1).unlockTime);
+
+        IStakingPoolV2Types.DepositRewardView memory reward = pool.earnedByDeposit(d1);
+        uint256 balanceBeforeClaim = rewardToken.balanceOf(user1);
+        _claim(user1);
+
+        assertApproxEqAbs(
+            rewardToken.balanceOf(user1) - balanceBeforeClaim,
+            reward.baseReward + reward.claimableBoostReward,
+            ROUNDING_TOLERANCE
+        );
+        assertTrue(pool.getDeposit(d1).boostSettled);
+    }
+
+    function test_LockBoost_MaturitySettlementRunsWhenRewardDeltaIsZero() public {
+        _notify(1_000 ether);
+        uint256 d1 = _stake(user1, 100 ether, LONG_LOCK, address(0));
+        vm.warp(block.timestamp + REWARDS_DURATION);
+        _claim(user1);
+        IStakingPoolV2Types.DepositView memory depositBeforeUnlock = pool.getDeposit(d1);
+        assertFalse(depositBeforeUnlock.boostSettled);
+        assertGt(depositBeforeUnlock.pendingBoostReward, 0);
+
+        uint256 balanceBeforeMatureClaim = rewardToken.balanceOf(user1);
+        vm.warp(depositBeforeUnlock.unlockTime);
+        _claim(user1);
+
+        IStakingPoolV2Types.DepositView memory depositAfterClaim = pool.getDeposit(d1);
+        assertTrue(depositAfterClaim.boostSettled);
+        assertEq(depositAfterClaim.pendingBoostReward, 0);
+        assertEq(rewardToken.balanceOf(user1) - balanceBeforeMatureClaim, depositBeforeUnlock.pendingBoostReward);
     }
 
     // ------------------------------------------------------------------
@@ -812,6 +953,23 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertApproxEqAbs(reward.pendingBoostReward, (reward.baseReward * SHORT_BOOST) / BPS, ROUNDING_TOLERANCE);
         assertEq(reward.claimableBoostReward, 0);
         assertApproxEqAbs(pool.earned(user2), reward.baseReward + reward.inviteeBoostReward, ROUNDING_TOLERANCE);
+    }
+
+    function test_PRD_EarnedMatchesNextClaimAllPayoutBeforeSettlementWithInviter() public {
+        _stake(user1, 100 ether, 0, address(0));
+        uint256 depositId = _stake(user2, 100 ether, 0, user1);
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+
+        IStakingPoolV2Types.DepositView memory depositBefore = pool.getDeposit(depositId);
+        assertEq(depositBefore.pendingBaseReward, 0);
+        assertEq(depositBefore.pendingInviteeBoostReward, 0);
+
+        uint256 earnedBeforeClaim = pool.earned(user2);
+        uint256 balanceBeforeClaim = rewardToken.balanceOf(user2);
+        _claim(user2);
+
+        assertApproxEqAbs(rewardToken.balanceOf(user2) - balanceBeforeClaim, earnedBeforeClaim, ROUNDING_TOLERANCE);
     }
 
     function test_ClaimAll_PaysBaseInviteeBoostReferralAndMatureBoost() public {
@@ -1056,6 +1214,26 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         _exit(user1);
         assertEq(pool.claimableReferralReward(user1), 0);
         assertGt(rewardToken.balanceOf(user1), 0);
+    }
+
+    function test_Exit_WithOnlyReferralRewardDoesNotWriteCheckpoint() public {
+        uint256 depositId = _stake(user1, 100 ether, 0, address(0));
+        _stake(user2, 100 ether, 0, user1);
+        _notify(1_000 ether);
+        vm.warp(block.timestamp + 1 days);
+        _claim(user2);
+        _withdraw(user1, depositId);
+
+        assertEq(pool.getActiveDepositIds(user1).length, 0);
+        assertGt(pool.claimableReferralReward(user1), 0);
+        vm.recordLogs();
+        _exit(user1);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 checkpointTopic = keccak256("RewardCheckpointWritten(uint256,uint256,uint256,uint256,bool)");
+        for (uint256 i; i < entries.length; ++i) {
+            assertTrue(entries[i].topics[0] != checkpointTopic);
+        }
+        assertEq(pool.claimableReferralReward(user1), 0);
     }
 
     function test_Exit_WithdrawsAllActiveDepositsAndDoesNotAffectOthers() public {

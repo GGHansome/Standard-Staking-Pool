@@ -1,5 +1,31 @@
 # 修改日志 (Changelog)
 
+**2026-06-23**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **统一活跃仓位上限口径**：将第 7.1 节中的 `MAX_ACTIVE_DEPOSITS = 50` 从示例表述调整为本版本固定安全参数，明确该值不是部署期可配置参数；如需采用其他上限，应修改源码、重新编译并同步测试验收口径。
+- **明确推荐模块一键关闭语义**：当 `inviteeBoost == 0 && level1 == 0 && level2 == 0 && level3 == 0` 时，推荐模块完全关闭；`stake` 必须忽略传入的 `inviter` 参数，不校验、不绑定、不写入 `hasSetInviter`，也不抛出推荐绑定相关事件。
+- **补充 V2 rewardRate 对外精度口径**：对齐 V1 文档。
+
+**src/V2/staking.sol**
+- **统一活跃仓位数量上限**：将 `MAX_ACTIVE_DEPOSITS` 从 `30` 调整为 `50`，与当前 PRD 口径和测试验收值保持一致。
+- **实现推荐模块全关闭短路**：当 `inviteeBoost`、`level1`、`level2`、`level3` 全为 0 时，`stake` 阶段跳过邀请关系处理，允许前端继续传入任意 `inviter` 参数但不产生校验、绑定或推荐事件，使活动池退化为无推荐模块的纯质押池。
+- **补齐奖励与补贴负债事件覆盖**：被邀请人自身加成归集时新增 `InviteeBoostRewardAccrued`，三级推荐奖励实际进入邀请人待领取余额时新增逐级 `ReferralRewardAccrued`；`unsettledMaxSubsidyLiability` 在用户结算消化最大理论补贴预算、空窗自然流失释放补贴预算时同步抛出 `UnsettledMaxSubsidyLiabilityUpdated`。链下索引器可以按奖励类型和补贴预算消化过程还原账本变化。
+- **修复锁仓到期切分被零奖励早返回跳过的问题**：根因是锁仓到期状态迁移与基础奖励归集耦合在同一段流程中，旧实现会在 `delta == 0` 或 `baseReward == 0` 时提前返回，导致已经到期的锁仓仓位没有缓存 `rewardPerTokenAtUnlock`，`boostSettled` 也不会置为 `true`。修复后，仓位奖励结算会先执行锁仓到期切分，再处理零基础奖励早返回；`earned` / `earnedByDeposit` 也会在只读上下文中用虚拟当前快照计算到期但尚未落盘的锁仓加成展示值，保证视图结果与下一次 `claimAll` / `withdraw` 的实际结算一致。
+- **收敛锁仓加成可领判定为单一状态来源**：删除独立的 `_isBoostClaimable`，将 `_claimDepositReward` 的锁仓加成支付条件收敛为 `pendingBoostReward > 0 && boostSettled`。锁仓加成是否可领统一以 `boostSettled` 为准，避免“状态未落盘但靠时间判断已付款”导致的仓位状态机与资金支付不一致。
+- **拆清仓位级退出与用户级推荐返佣边界**：`withdraw` / `withdrawMultiple` 不再顺带领取调用者的用户级推荐返佣，只结清被关闭仓位的本金、罚金和仓位级奖励；用户级推荐返佣继续通过 `claimAll` / `exit` 领取。
+- **exit退出时写入历史记录限制**：当用户通过 `exit()` 领取奖励并退出仓位的时候，不存在活跃仓位将视作为单纯的奖励领取操作，此时不更改全局水位线，也就不需要进行 `_writeRewardCheckpoint()` 操作
+
+**test/V2/staking.p0.t.sol**
+- **补齐 PRD 回归覆盖**：新增/更新测试覆盖奖励类型事件、`unsettledMaxSubsidyLiability` 扣减事件、锁仓到期零增量切分、到期未落盘仓位的只读展示口径，以及 `withdraw` / `withdrawMultiple` 不领取用户级推荐返佣的资金流边界。
+- **补强只读视图与实付一致性回归**：新增 `test_PRD_EarnedMatchesNextClaimAllPayoutBeforeSettlementWithInviter` 和 `test_PRD_EarnedByDepositMatureBoostMatchesNextClaimAllPayout`，锁定 `earned(user)` / `earnedByDeposit(depositId)` 在未触发状态结算时必须与下一次 `claimAll` 实际支付金额一致。
+- **补齐补贴负债和奖励速率口径测试**：新增 `test_NotifyRewardAmount_EmitsUnsettledLiabilityIncrease` 覆盖未结算最大补贴负债增加事件。
+- **补齐 exit 空仓位快照边界测试**：新增 `test_Exit_WithOnlyReferralRewardDoesNotWriteCheckpoint`，覆盖仅领取用户级推荐返佣、不关闭任何活跃仓位时不得写入 `RewardCheckpointWritten`。
+- **补充推荐模块关闭回归测试**：新增 `test_Referral_DisabledReferralIgnoresInvalidInviterAndDoesNotBind`，覆盖推荐费率全 0 时 `stake` 忽略无效或自身 `inviter`，且不写入邀请关系状态。
+
+**test/V2/TEST_LIST_V2_Staking.md**
+- **同步测试清单描述**：更新新增和调整过的 P0 用例说明，使测试计划与当前合约行为、PRD 边界和测试实现保持一致。
+
 **2026-06-10**
 
 **PRD/V2/PRD_V2_Staking.md**

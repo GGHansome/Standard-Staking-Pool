@@ -324,6 +324,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 ### 6.5 精度规范
 - **Basis Point（基点）精度**：智能合约中不支持浮点数，因此本 PRD 中涉及的所有百分比（如锁仓加速比例 `boosts`、推荐补贴与返佣比例 `inviteeBoost / level1 / level2 / level3`、罚金率 `penaltyRate` 等）在合约底层均采用万分位（Basis Point, BPS）精度标准。
 - **换算关系**：`10000` 代表 `100%`，`1000` 代表 `10%`，`500` 代表 `5%`，`1` 代表 `0.01%`。
+- **奖励速率精度**：`rewardRate` 在合约内部采用 `PRECISION = 1e18` 放大存储与返回。
 - **补贴舍入规则**：所有按比例计算的补贴相关金额均采用向下取整，即 `floor(amount * rate / BPS)`。该规则统一适用于 `notifyRewardAmount` 中的 `requiredSubsidy`、`updateReward` 中的 `maxSubsidyBudgetDelta`，以及实际计提到 `pendingInviteeBoostReward`、`pendingBoostReward`、`referralRewards` 的自身推荐补贴、锁仓加速奖励和推荐返佣。不得对实际补贴支付使用向上取整，避免 BPS 精度尾差导致支付金额超过已按相同口径预留的最大理论预算。
 - **负债饱和扣减**：扣减 `unsettledMaxSubsidyLiability` 时必须使用饱和扣减语义，实际扣减金额为 `min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability)`；当计算出的预算释放额大于当前未结算负债余额时，将 `unsettledMaxSubsidyLiability` 置为 0，不得发生 underflow。
 
@@ -332,7 +333,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 ## 7. 安全边界与异常处理 (Risk Management)
 
 ### 7.1 活跃仓位数量限制
-为防止大量微小仓位导致 `updateReward` 遍历时 Out of Gas，合约必须引入双数组分离机制。仅将 `amount > 0` 的仓位 ID 存入 `activeDepositIds`，并限制最大长度（如 `MAX_ACTIVE_DEPOSITS = 50`）。该上限必须通过视图接口暴露，便于前端提示。
+为防止大量微小仓位导致 `updateReward` 遍历时 Out of Gas，合约必须引入双数组分离机制。仅将 `amount > 0` 的仓位 ID 存入 `activeDepositIds`，并限制最大长度。本版本将该上限固定为 `MAX_ACTIVE_DEPOSITS = 50`，该值为合约版本级安全参数，不作为部署期可配置参数；如需采用其他上限，应修改源码、重新编译并同步测试验收口径。该上限必须通过视图接口暴露，便于前端提示。
 
 当仓位被提取（`amount = 0`）时，采用 `Swap and Pop` 算法将其从活跃数组中以 O(1) 复杂度移除。
 
@@ -345,7 +346,7 @@ V2 将每个合约实例视为一个独立活动池。所有涉及经济承诺�
 上级推荐返佣必须采用纯记账而非直接转账。这样既将转账成本延后至上级主动 `claimAll`，也可避免上级地址异常导致下级领取奖励交易被回滚（DOS 攻击）。
 
 ### 7.4 邀请关系安全边界
-- **有效邀请人校验**：仅在首次质押时处理邀请关系。有效邀请人定义见第 3.5 节；首次质押传入 `address(0)` 则永久标记为“无上级”，传入非零但无效地址必须 revert。非首次质押时直接忽略邀请人参数。
+- **有效邀请人校验**：仅在推荐模块启用且用户首次质押时处理邀请关系。有效邀请人定义见第 3.5 节；首次质押传入 `address(0)` 则永久标记为“无上级”，传入非零但无效地址必须 revert。非首次质押时直接忽略邀请人参数。当 `inviteeBoost == 0 && level1 == 0 && level2 == 0 && level3 == 0` 时，推荐模块完全关闭。
 - **女巫攻击（小号套利）**：用户可能使用自己的小号作为邀请人。由于补贴的发放严格依赖于真实资金质押产生的基础奖励，即使使用小号，系统也获得了真实的 TVL 增长，在经济模型上属于可接受的博弈结果。
 - **环形邀请验证边界**：为防止无限层级遍历导致 Out of Gas，合约在绑定邀请人时，只需向上追溯验证 3 级。只要 `msg.sender` 不在这 3 个直接上级的地址中，即视为合法。超过 3 级的环形嵌套在经济模型上无法套取额外奖励，无需消耗 Gas 进行全链路防御。
 
@@ -451,7 +452,7 @@ V2 视图接口必须同时服务前端产品展示、链下索引器对账和�
 - `MAX_ACTIVE_DEPOSITS()`：返回单个用户允许持有的最大活跃仓位数量，供前端在用户接近或达到上限时提前提示。
 
 #### 奖励周期与资金账本视图
-- `getRewardSchedule()`：返回当前奖励周期状态 `(rewardsDuration, periodFinish, rewardRate, lastUpdateTime, rewardPerTokenStored)`，供前端展示剩余周期、APR 估算与索引器对账。
+- `getRewardSchedule()`：返回当前奖励周期状态 `(rewardsDuration, periodFinish, rewardRate, lastUpdateTime, rewardPerTokenStored)`，供前端展示剩余周期、APR 估算与索引器对账。其中 `rewardRate` 为合约内部精度值，已按 `1e18` 放大；前端计算真实每秒基础奖励数量或 APR 时须先除以 `1e18`。
 - `isRewardPeriodActive()`：返回当前是否处于有效基础奖励释放周期，定义见第 2.2 节。该函数返回 `false` 时，`stake` 仍可创建活期仓位，但任何 `duration > 0` 的锁仓选择都必须 revert。
 - `baseRewardReserve()`：返回基础奖池未支付余额，作为第 4.1 节资产余额覆盖不变量的链上校验口径。
 - `remainingBaseReward()`：返回当前周期尚未释放的基础奖励余额，即 `rewardRate * (periodFinish - block.timestamp)` 在未结束周期内对应的未释放数量；若当前周期已结束则返回 0。该值仅用于前端展示奖励周期剩余额度，不得单独作为 `maxSweepableSubsidy()` 的安全提取依据。

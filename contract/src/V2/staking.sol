@@ -100,7 +100,14 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     uint256 public override totalPendingSubsidy;
 
     /// @notice 尚未通过实际结算冲销的最大补贴负债。
+    /// @dev 恒等于 floor(injectedBaseCumulative · maxSubsidyRate / BPS) - floor(settledBaseCumulative · maxSubsidyRate / BPS)。
     uint256 public override unsettledMaxSubsidyLiability;
+
+    /// @notice 历史累计注入的基础奖励总额，单调递增。
+    uint256 public injectedBaseCumulative;
+
+    /// @notice 历史累计已消化的基础奖励总额（仓位归集 + 空池自然衰减），单调递增。
+    uint256 public settledBaseCumulative;
 
     // ---------------------------------------------------------------------
     // Pool state
@@ -405,8 +412,10 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         uint256 applicableTime = lastTimeRewardApplicable();
         if (totalSupply == 0 && applicableTime > lastUpdateTime) {
             uint256 naturalAttritionReward = Math.mulDiv(rewardRate, applicableTime - lastUpdateTime, PRECISION);
-            uint256 maxSubsidyBudgetDelta = _proportionalBpsReward(naturalAttritionReward, maxSubsidyRate);
-            syncedUnsettledLiability -= Math.min(maxSubsidyBudgetDelta, syncedUnsettledLiability);
+            uint256 consumedBase = Math.min(naturalAttritionReward, baseRewardReserve);
+            uint256 projectedSettled = settledBaseCumulative + consumedBase;
+            syncedUnsettledLiability = _proportionalBpsReward(injectedBaseCumulative, maxSubsidyRate)
+                - _proportionalBpsReward(projectedSettled, maxSubsidyRate);
         }
 
         uint256 liability = totalPendingSubsidy + syncedUnsettledLiability;
@@ -520,7 +529,9 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
             revert RewardAmountCannotBeZero();
         }
         uint256 actualBaseReward = _pullExact(rewardToken, msg.sender, baseRewardAmount);
-        uint256 requiredSubsidy = _proportionalBpsReward(actualBaseReward, maxSubsidyRate);
+        uint256 prevInjectedBudget = _proportionalBpsReward(injectedBaseCumulative, maxSubsidyRate);
+        injectedBaseCumulative += actualBaseReward;
+        uint256 requiredSubsidy = _proportionalBpsReward(injectedBaseCumulative, maxSubsidyRate) - prevInjectedBudget;
         uint256 sweepable = maxSweepableSubsidy();
         uint256 subsidyCharged = 0;
         if (requiredSubsidy > sweepable) {
@@ -531,8 +542,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         }
 
         baseRewardReserve += actualBaseReward;
-        unsettledMaxSubsidyLiability += requiredSubsidy;
-        emit UnsettledMaxSubsidyLiabilityUpdated(unsettledMaxSubsidyLiability);
+        _syncUnsettledMaxSubsidyLiability();
 
         if (block.timestamp >= periodFinish) {
             rewardRate = (actualBaseReward * PRECISION) / rewardsDuration;
@@ -614,12 +624,11 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         uint256 applicableTime = lastTimeRewardApplicable();
         if (totalSupply == 0 && applicableTime > lastUpdateTime) {
             uint256 naturalAttritionReward = Math.mulDiv(rewardRate, applicableTime - lastUpdateTime, PRECISION);
-            uint256 maxSubsidyBudgetDelta = _proportionalBpsReward(naturalAttritionReward, maxSubsidyRate);
-            uint256 liabilityDeducted = Math.min(maxSubsidyBudgetDelta, unsettledMaxSubsidyLiability);
-            baseRewardReserve -= Math.min(naturalAttritionReward, baseRewardReserve);
-            if (liabilityDeducted > 0) {
-                unsettledMaxSubsidyLiability -= liabilityDeducted;
-                emit UnsettledMaxSubsidyLiabilityUpdated(unsettledMaxSubsidyLiability);
+            uint256 consumedBase = Math.min(naturalAttritionReward, baseRewardReserve);
+            baseRewardReserve -= consumedBase;
+            if (consumedBase > 0) {
+                settledBaseCumulative += consumedBase;
+                _syncUnsettledMaxSubsidyLiability();
             }
         }
 
@@ -819,7 +828,6 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         }
         uint256 referralReward = _accrueReferralRewards(deposit.owner, depositId, baseReward);
         uint256 subsidyReward = inviteeBoostReward + referralReward + boostReward;
-        uint256 maxSubsidyDelta = _proportionalBpsReward(baseReward, maxSubsidyRate);
 
         deposit.pendingBaseReward += baseReward;
         deposit.rewardPerTokenPaid = rewardPerTokenStored;
@@ -827,11 +835,8 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
 
         totalPendingSubsidy += subsidyReward;
 
-        uint256 liabilityDeducted = Math.min(maxSubsidyDelta, unsettledMaxSubsidyLiability);
-        if (liabilityDeducted > 0) {
-            unsettledMaxSubsidyLiability -= liabilityDeducted;
-            emit UnsettledMaxSubsidyLiabilityUpdated(unsettledMaxSubsidyLiability);
-        }
+        settledBaseCumulative += baseReward;
+        _syncUnsettledMaxSubsidyLiability();
 
         if (inviteeBoostReward > 0) {
             emit InviteeBoostRewardAccrued(deposit.owner, depositId, inviteeBoostReward);
@@ -1177,6 +1182,17 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     /// @return reward 折算后的奖励数量。
     function _proportionalBpsReward(uint256 amount, uint256 bps) internal pure returns (uint256 reward) {
         reward = Math.mulDiv(amount, bps, BPS);
+    }
+
+    /// @notice 依据注入与已消化的基础奖励累计量重算最大补贴负债。
+    /// @dev floor 仅作用于累计量，避免逐笔结算的 floor 尾差累积成无法释放的幽灵负债。
+    function _syncUnsettledMaxSubsidyLiability() internal {
+        uint256 newLiability = _proportionalBpsReward(injectedBaseCumulative, maxSubsidyRate)
+            - _proportionalBpsReward(settledBaseCumulative, maxSubsidyRate);
+        if (newLiability != unsettledMaxSubsidyLiability) {
+            unsettledMaxSubsidyLiability = newLiability;
+            emit UnsettledMaxSubsidyLiabilityUpdated(newLiability);
+        }
     }
 
     // ---------------------------------------------------------------------

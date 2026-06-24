@@ -91,6 +91,7 @@
 - `test_AccrueReward_ClosedDepositStopsReceivingFutureRewards`：关闭仓位不再获得未来奖励。
 - `test_AccrueReward_UpdatesDepositWatermarkAndPendingBase`：结算后仓位水位线和待领取基础奖励更新。
 - `test_AccrueReward_ReducesUnsettledLiabilityByMaxSubsidyDelta`：基础奖励实际结算后冲减对应最大理论补贴预算，并抛出未结算最大补贴负债更新事件。
+- `test_AccrueReward_CumulativeLiabilityClearsSegmentedFloorDust`：累计量口径应消除分段取整尾差；`3 wei` 基础奖励按 `50%` 最大补贴率预留 `1 wei` 后，由三个仓位各结算 `1 wei`，最终未结算最大补贴负债必须归零，沉淀补贴可完整清扫。
 - `test_AccrueReward_EmptyPoolNaturalAttritionEmitsUnsettledLiabilityUpdate`：空窗自然流失释放最大补贴预算时，应抛出未结算最大补贴负债更新事件。
 - `test_AccrueReward_TotalPendingSubsidyTracksActualSubsidies`：已确认补贴负债等于实际计提的自身补贴、锁仓补贴和推荐返佣。
 

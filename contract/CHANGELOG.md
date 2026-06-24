@@ -1,5 +1,16 @@
 # 修改日志 (Changelog)
 
+**2026-06-24**
+
+**src/V2/staking.sol**
+- **修复最大补贴负债分段取整尾差**：新增 `injectedBaseCumulative` 与 `settledBaseCumulative` 两个基础奖励累计口径，将 `unsettledMaxSubsidyLiability` 收敛为 `floor(injectedBaseCumulative * maxSubsidyRate / BPS) - floor(settledBaseCumulative * maxSubsidyRate / BPS)`，避免注入侧按总额取整、结算侧按仓位分段取整导致 1 wei 幽灵负债永久占用补贴备付金。
+
+**test/V2/staking.p0.t.sol**
+- **补充分段取整尾差回归测试**：新增 `test_AccrueReward_CumulativeLiabilityClearsSegmentedFloorDust`，覆盖 `3 wei` 基础奖励按 `50%` 最大补贴率预留 `1 wei`，再由三个仓位各自结算 `1 wei` 时，最终 `unsettledMaxSubsidyLiability` 必须归零，且沉淀补贴可通过 `maxSweepableSubsidy()` 完整释放。
+
+**test/V2/TEST_LIST_V2_Staking.md**
+- **同步分段取整尾差测试清单**：在基础奖励与补贴计提分组中补充 `test_AccrueReward_CumulativeLiabilityClearsSegmentedFloorDust`。
+
 **2026-06-23**
 
 **PRD/V2/PRD_V2_Staking.md**

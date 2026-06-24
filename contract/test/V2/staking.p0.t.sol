@@ -634,6 +634,42 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertEq(pool.unsettledMaxSubsidyLiability(), expectedLiability);
     }
 
+    function test_AccrueReward_CumulativeLiabilityClearsSegmentedFloorDust() public {
+        StakingPoolTypes.ConstructorParams memory params = _defaultParams(address(stakingToken), address(rewardToken));
+        params.rewardsDuration = 3;
+        params.inviteeBoost = 0;
+        params.level1 = 0;
+        params.level2 = 0;
+        params.level3 = 0;
+        (params.durations, params.boosts) = _oneLockTier(SHORT_LOCK, 5_000);
+        params.maxSubsidyRateCap = 5_000;
+        StakingPool dustPool = _deployWithParams(params);
+        _fundAndApproveDefault(dustPool, stakingToken, rewardToken);
+
+        vm.prank(user1);
+        dustPool.stake(1 wei, 0, address(0));
+        vm.prank(user2);
+        dustPool.stake(1 wei, 0, address(0));
+        vm.prank(user3);
+        dustPool.stake(1 wei, 0, address(0));
+
+        vm.prank(operator);
+        dustPool.notifyRewardAmount(3 wei);
+        assertEq(dustPool.unsettledMaxSubsidyLiability(), 1 wei);
+
+        vm.warp(block.timestamp + 3);
+        vm.prank(user1);
+        dustPool.claimAll();
+        vm.prank(user2);
+        dustPool.claimAll();
+        vm.prank(user3);
+        dustPool.claimAll();
+
+        assertEq(dustPool.baseRewardReserve(), 0);
+        assertEq(dustPool.unsettledMaxSubsidyLiability(), 0);
+        assertEq(dustPool.maxSweepableSubsidy(), dustPool.subsidyReserve());
+    }
+
     function test_AccrueReward_EmptyPoolNaturalAttritionEmitsUnsettledLiabilityUpdate() public {
         _notify(1_000 ether);
         vm.warp(block.timestamp + 1 days);
@@ -697,14 +733,14 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         uint256 expectedLevel2Reward = (expectedBaseReward * LEVEL2) / BPS;
         uint256 expectedLevel3Reward = (expectedBaseReward * LEVEL3) / BPS;
 
-        vm.expectEmit(true, true, false, true, address(pool));
-        emit InviteeBoostRewardAccrued(user4, sourceDepositId, expectedInviteeBoostReward);
         vm.expectEmit(true, true, true, true, address(pool));
         emit ReferralRewardAccrued(user3, user4, 1, sourceDepositId, expectedLevel1Reward);
         vm.expectEmit(true, true, true, true, address(pool));
         emit ReferralRewardAccrued(user2, user4, 2, sourceDepositId, expectedLevel2Reward);
         vm.expectEmit(true, true, true, true, address(pool));
         emit ReferralRewardAccrued(user1, user4, 3, sourceDepositId, expectedLevel3Reward);
+        vm.expectEmit(true, true, false, true, address(pool));
+        emit InviteeBoostRewardAccrued(user4, sourceDepositId, expectedInviteeBoostReward);
         vm.expectEmit(true, true, false, true, address(pool));
         emit BaseRewardAccrued(user4, sourceDepositId, expectedBaseReward);
         _claim(user4);

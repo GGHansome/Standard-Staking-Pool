@@ -106,7 +106,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     /// @notice 历史累计注入的基础奖励总额，单调递增。
     uint256 public injectedBaseCumulative;
 
-    /// @notice 历史累计已消化的基础奖励总额（仓位归集 + 空池自然衰减），单调递增。
+    /// @notice 历史累计已消化的基础奖励总额（仓位归集 + 空池自然衰减 + 过期回收），单调递增。
     uint256 public settledBaseCumulative;
 
     // ---------------------------------------------------------------------
@@ -541,15 +541,21 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
             emit SubsidyReserved(subsidyCharged);
         }
 
+        uint256 nextRewardRate;
+        if (block.timestamp >= periodFinish) {
+            nextRewardRate = Math.mulDiv(actualBaseReward, PRECISION, rewardsDuration);
+        } else {
+            uint256 leftoverBaseReward = remainingBaseReward();
+            nextRewardRate = Math.mulDiv(actualBaseReward + leftoverBaseReward, PRECISION, rewardsDuration);
+        }
+        if (nextRewardRate == 0) {
+            revert RewardAmountTooSmall();
+        }
+
         baseRewardReserve += actualBaseReward;
         _syncUnsettledMaxSubsidyLiability();
 
-        if (block.timestamp >= periodFinish) {
-            rewardRate = (actualBaseReward * PRECISION) / rewardsDuration;
-        } else {
-            uint256 leftoverBase = remainingBaseReward();
-            rewardRate = ((actualBaseReward + leftoverBase) * PRECISION) / rewardsDuration;
-        }
+        rewardRate = nextRewardRate;
         lastUpdateTime = block.timestamp;
         periodFinish = block.timestamp + rewardsDuration;
 
@@ -587,6 +593,32 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         subsidyReserve -= amount;
         IERC20(rewardToken).safeTransfer(to, amount);
         emit SubsidySwept(to, amount);
+    }
+
+    /// @inheritdoc IStakingPoolV2
+    function sweepExpiredBaseReward(
+        address to
+    ) external override nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) whenNotPaused updateReward(address(0)) assertAssetCoverage {
+        if (to == address(0)) {
+            revert AddressCannotBeZero();
+        }
+        if (block.timestamp < periodFinish) {
+            revert RewardPeriodStillActive();
+        }
+        if (totalSupply != 0) {
+            revert ActiveStakesExist();
+        }
+
+        uint256 amount = baseRewardReserve;
+        if (amount == 0) {
+            revert AmountMustBeGreaterThanZero();
+        }
+
+        baseRewardReserve = 0;
+        settledBaseCumulative += amount;
+        _syncUnsettledMaxSubsidyLiability();
+        IERC20(rewardToken).safeTransfer(to, amount);
+        emit ExpiredBaseRewardSwept(to, amount);
     }
 
     /// @inheritdoc IStakingPoolV2

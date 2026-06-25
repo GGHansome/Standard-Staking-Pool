@@ -16,6 +16,9 @@ interface IStakingPoolV2Errors {
     /// @notice 注入的基础奖励数量不能为 0。
     error RewardAmountCannotBeZero();
 
+    /// @notice 注入的基础奖励太小，无法形成有效释放速率。
+    error RewardAmountTooSmall();
+
     /// @notice 指定的质押仓位不存在。
     error DepositDoesNotExist();
 
@@ -72,6 +75,12 @@ interface IStakingPoolV2Errors {
 
     /// @notice 可清扫补贴余额不足。
     error InsufficientSweepableSubsidy();
+
+    /// @notice 奖励周期仍处于激活状态。
+    error RewardPeriodStillActive();
+
+    /// @notice 池内仍存在活跃质押本金。
+    error ActiveStakesExist();
 
     /// @notice 合约资产余额不足以覆盖质押本金、基础奖励和补贴储备。
     error InsufficientAssetCoverage();

@@ -191,6 +191,10 @@ interface IStakingPoolV2 is IAccessControl, IStakingPoolV2Types, IStakingPoolV2E
     /// @param amount 清扫数量。
     function sweepSubsidy(address to, uint256 amount) external;
 
+    /// @notice 回收奖励周期结束且空池后的全部剩余基础奖励。
+    /// @param to 接收地址。
+    function sweepExpiredBaseReward(address to) external;
+
     /// @notice 暂停用户质押、奖励注入和补贴清扫等受控操作。
     function pause() external;
 

@@ -308,15 +308,15 @@
 
 Invariant 不属于 P0 单元测试，但建议在 P0 主流程稳定后写。它用于随机组合操作后持续检查账本不变量。
 
-- `invariant_TotalSupplyEqualsActiveDepositAmounts`：总质押始终等于所有活跃仓位本金之和。
-- `invariant_UserTotalStakedEqualsUserActiveDepositAmounts`：每个用户质押汇总始终等于其活跃仓位本金之和。
+- `invariant_TotalSupplyEqualsTrackedActivePrincipal`：总质押始终等于已跟踪用户的活跃仓位本金之和；每个用户的质押汇总也等于其活跃仓位本金之和。
+- `invariant_DistinctTokenBalancesCoverAccountingReserves`：异币池下，质押 token 余额覆盖总本金，奖励 token 余额覆盖基础奖励储备和补贴储备。
+- `invariant_SubsidySweepableNeverExceedsReserve`：可清扫补贴和已确认补贴负债都不能超过补贴储备。
 - `invariant_SubsidyReserveCoversPendingAndUnsettledLiability`：补贴备付金始终覆盖已确认补贴负债和未结算最大补贴负债。
 - `invariant_TotalPendingSubsidyMatchesAllPendingSubsidies`：已确认补贴负债始终等于所有仓位补贴 pending 和推荐返佣余额之和。
-- `invariant_UnsettledLiabilityOnlyChangesOnNotifySettleOrAttrition`：未结算最大补贴负债只在注入时增加、在用户结算或空窗流失时减少，不因有 TVL 的正常时间流逝自动下降。
-- `invariant_ClosedDepositsAreNotActive`：关闭仓位不会留在活跃仓位列表里。
+- `invariant_UnsettledLiabilityOnlyChangesOnNotifySettleOrAttrition`：未结算最大补贴负债只在注入、用户结算或空窗流失等允许范围内变化。
 - `invariant_ActiveDepositIdsHaveNoDuplicates`：任意用户活跃仓位列表中不存在重复仓位编号。
 - `invariant_RewardPerTokenNeverDecreases`：全局奖励水位线不会下降。
-- `invariant_ContractBalancesCoverLogicalBuckets`：合约余额始终覆盖本金、基础奖励、补贴三类逻辑资金桶。
+- `invariant_KnownClosedDepositsAreNotActive`：已跟踪且关闭的仓位不会留在 owner 的活跃仓位列表里。
 
 ---
 

@@ -178,6 +178,11 @@ interface IStakingPoolV2Events {
     /// @param amount 清扫数量。
     event SubsidySwept(address indexed to, uint256 amount);
 
+    /// @notice 管理员回收奖励周期结束且空池后的剩余基础奖励。
+    /// @param to 基础奖励接收地址。
+    /// @param amount 回收数量。
+    event ExpiredBaseRewardSwept(address indexed to, uint256 amount);
+
     /// @notice 用户提前退出罚金被支付至金库。
     /// @param user 支付罚金的用户地址。
     /// @param depositId 产生罚金的仓位编号。

@@ -1,5 +1,23 @@
 # 修改日志 (Changelog)
 
+**2026-06-25**
+
+**PRD/V2/PRD_V2_Staking.md**
+- **澄清质押仓位选择口径（对应章节：3.2）**：将“必须选择一个锁仓档位”调整为“必须选择一种仓位类型：活期，或某个已配置锁仓档位”，与 `duration == 0` 活期仓位、首次注入前/周期间空窗只允许活期质押，以及当前合约行为保持一致。
+
+ **src/V2/staking.sol**
+- **修复过期基础奖励尾差锁定问题**：`notifyRewardAmount` 在写入新周期前先校验本轮调度奖励是否能形成非零 
+`rewardRate`，否则以 `RewardAmountTooSmall` 回退；新增 `sweepExpiredBaseReward(to)`，仅允许管理员在奖励周期结束且 `totalSupply == 0` 时一次性回收全部剩余 `baseRewardReserve`，并同步增加 `settledBaseCumulative`、释放对应 `unsettledMaxSubsidyLiability`，避免取整 dust 永久锁定基础奖励和补贴备付金。
+
+**src/V2/interface.sol / errors.sol / events.sol**
+- **同步过期基础奖励回收接口表面**：新增 `sweepExpiredBaseReward` 外部接口、`ExpiredBaseRewardSwept` 事件，以及 `RewardAmountTooSmall`、`RewardPeriodStillActive`、`ActiveStakesExist` 等错误定义。
+
+**src/V2/interface.sol**
+- **补齐默认管理员角色 ABI**：在 `IStakingPoolV2` 中显式声明 `DEFAULT_ADMIN_ROLE()`，使前端、治理脚本或测试仅基于接口 ABI 集成时也能读取默认管理员角色，无需硬编码 `bytes32(0)`。
+
+**test/V2/staking.p0.t.sol**
+- **补充过期基础奖励回收回归测试**：新增 `test_NotifyRewardAmount_RevertWhenAmountCannotCreateRewardRate` 与 `test_SweepExpiredBaseReward_ReleasesRoundingDustAndSubsidyLiability`，覆盖小额奖励无法形成释放速率时回退，以及周期结束、空池后基础奖励 dust 可回收并释放补贴负债。
+
 **2026-06-24**
 
 **src/V2/staking.sol**

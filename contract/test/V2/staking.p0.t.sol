@@ -244,6 +244,18 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         pool.notifyRewardAmount(0);
     }
 
+    function test_NotifyRewardAmount_RevertWhenAmountCannotCreateRewardRate() public {
+        StakingPoolTypes.ConstructorParams memory params = _defaultParams(address(stakingToken), address(rewardToken));
+        params.rewardsDuration = 1e18 + 1;
+        StakingPool tinyRatePool = _deployWithParams(params);
+        _fundAndApproveDefault(tinyRatePool, stakingToken, rewardToken);
+
+        vm.prank(operator);
+        vm.expectRevert(IStakingPoolV2Errors.RewardAmountTooSmall.selector);
+        tinyRatePool.notifyRewardAmount(1 wei);
+        assertEq(rewardToken.balanceOf(address(tinyRatePool)), 0);
+    }
+
     function test_NotifyRewardAmount_RevertWhenRewardTransferIsNotExact() public {
         FeeOnTransferMockERC20 feeReward = new FeeOnTransferMockERC20("Fee Reward", "FRWD", 18, 100);
         StakingPool feePool = _deployDefault(address(stakingToken), address(feeReward), operator, treasury);
@@ -1350,6 +1362,43 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         vm.prank(admin);
         pool.sweepSubsidy(receiver, sweepable);
         assertGe(pool.subsidyReserve(), pool.totalPendingSubsidy() + pool.unsettledMaxSubsidyLiability());
+    }
+
+    function test_SweepExpiredBaseReward_ReleasesRoundingDustAndSubsidyLiability() public {
+        StakingPoolTypes.ConstructorParams memory params = _defaultParams(address(stakingToken), address(rewardToken));
+        params.rewardsDuration = 1;
+        StakingPool dustPool = _deployWithParams(params);
+        _fundAndApproveDefault(dustPool, stakingToken, rewardToken);
+
+        vm.prank(user1);
+        dustPool.stake(1 wei, 0, address(0));
+        vm.prank(user2);
+        dustPool.stake(1 wei, 0, address(0));
+        vm.prank(user3);
+        dustPool.stake(1 wei, 0, address(0));
+        vm.prank(operator);
+        dustPool.notifyRewardAmount(2 wei);
+
+        vm.warp(block.timestamp + 1);
+        vm.prank(user1);
+        dustPool.withdraw(1);
+        vm.prank(user2);
+        dustPool.withdraw(2);
+        vm.prank(user3);
+        dustPool.withdraw(3);
+
+        assertEq(dustPool.totalSupply(), 0);
+        assertEq(dustPool.baseRewardReserve(), 2 wei);
+        assertEq(dustPool.unsettledMaxSubsidyLiability(), 1 wei);
+
+        uint256 receiverBefore = rewardToken.balanceOf(receiver);
+        vm.prank(admin);
+        dustPool.sweepExpiredBaseReward(receiver);
+
+        assertEq(dustPool.baseRewardReserve(), 0);
+        assertEq(dustPool.unsettledMaxSubsidyLiability(), 0);
+        assertEq(dustPool.maxSweepableSubsidy(), 1 wei);
+        assertEq(rewardToken.balanceOf(receiver) - receiverBefore, 2 wei);
     }
 
     function test_AssetCoverage_DistinctTokensCoversPrincipalBaseAndSubsidy() public {

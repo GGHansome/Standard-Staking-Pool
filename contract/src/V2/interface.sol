@@ -6,9 +6,9 @@ import "./errors.sol";
 import "./events.sol";
 import "./types.sol";
 
-/// @title IStakingPoolV2
-/// @notice 质押池 V2 的统一外部接口，覆盖权限、查询、质押、领取、退出、奖励注入和管理操作。
-interface IStakingPoolV2 is IAccessControl, IStakingPoolV2Types, IStakingPoolV2Events, IStakingPoolV2Errors {
+/// @title IStakingPoolV2Core
+/// @notice 质押池 V2 的合约继承接口，排除 OpenZeppelin AccessControl 已经通过 public constant 暴露的 DEFAULT_ADMIN_ROLE getter。
+interface IStakingPoolV2Core is IAccessControl, IStakingPoolV2Types, IStakingPoolV2Events, IStakingPoolV2Errors {
     /// @notice 奖励注入操作员角色。
     /// @return 操作员角色标识。
     function OPERATOR_ROLE() external view returns (bytes32);
@@ -153,6 +153,14 @@ interface IStakingPoolV2 is IAccessControl, IStakingPoolV2Types, IStakingPoolV2E
     /// @return 未结算最大补贴负债。
     function unsettledMaxSubsidyLiability() external view returns (uint256);
 
+    /// @notice 查询历史累计注入的基础奖励总额。
+    /// @return amount 历史累计注入的基础奖励数量。
+    function injectedBaseCumulative() external view returns (uint256 amount);
+
+    /// @notice 查询历史累计已消化的基础奖励总额。
+    /// @return amount 历史累计已消化的基础奖励数量。
+    function settledBaseCumulative() external view returns (uint256 amount);
+
     /// @notice 查询当前最多可被管理员清扫的补贴余额。
     /// @return 可清扫补贴数量。
     function maxSweepableSubsidy() external view returns (uint256);
@@ -205,4 +213,12 @@ interface IStakingPoolV2 is IAccessControl, IStakingPoolV2Types, IStakingPoolV2E
     /// @param token 被救援的 ERC20 地址。
     /// @param amount 救援数量。
     function recoverERC20(address token, uint256 amount) external;
+}
+
+/// @title IStakingPoolV2
+/// @notice 质押池 V2 的统一外部 ABI，覆盖权限、查询、质押、领取、退出、奖励注入和管理操作。
+interface IStakingPoolV2 is IStakingPoolV2Core {
+    /// @notice 默认管理员角色。
+    /// @return 默认管理员角色标识。
+    function DEFAULT_ADMIN_ROLE() external view returns (bytes32);
 }

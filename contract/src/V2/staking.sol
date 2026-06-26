@@ -13,9 +13,9 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 /**
  * @title StakingPool
  * @notice V2 锁仓推荐质押池框架。
- * @dev 当前文件按 IStakingPoolV2 搭建存储、权限、视图和入口骨架；具体奖励结算、补贴预算、快照插值由后续开发补齐。
+ * @dev 当前文件按 IStakingPoolV2Core 搭建存储、权限、视图和入口骨架；具体奖励结算、补贴预算、快照插值由后续开发补齐。
  */
-contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausable, ReentrancyGuard {
+contract StakingPool is StakingPoolTypes, IStakingPoolV2Core, AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ---------------------------------------------------------------------
@@ -104,10 +104,10 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     uint256 public override unsettledMaxSubsidyLiability;
 
     /// @notice 历史累计注入的基础奖励总额，单调递增。
-    uint256 public injectedBaseCumulative;
+    uint256 public override injectedBaseCumulative;
 
     /// @notice 历史累计已消化的基础奖励总额（仓位归集 + 空池自然衰减 + 过期回收），单调递增。
-    uint256 public settledBaseCumulative;
+    uint256 public override settledBaseCumulative;
 
     // ---------------------------------------------------------------------
     // Pool state
@@ -263,17 +263,17 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         return interfaceId == type(IStakingPoolV2).interfaceId || super.supportsInterface(interfaceId);
     }
 
-    /// @inheritdoc IStakingPoolV2
-    function paused() public view override(IStakingPoolV2, Pausable) returns (bool) {
+    /// @inheritdoc IStakingPoolV2Core
+    function paused() public view override(IStakingPoolV2Core, Pausable) returns (bool) {
         return super.paused();
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getDeposit(uint256 depositId) external view override returns (DepositView memory deposit) {
         deposit = _toDepositView(deposits[depositId]);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getActiveDepositIds(address user) external view override returns (uint256[] memory depositIds) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -281,7 +281,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         depositIds = activeDepositIds[user];
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getUserDeposits(address user) external view override returns (DepositView[] memory userDeposits) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -293,7 +293,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         }
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function totalStakedOf(address user) external view override returns (uint256 amount) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -301,7 +301,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         amount = userTotalStaked[user];
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function earned(address user) public view override returns (uint256 amount) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -314,7 +314,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         amount += referralRewards[user];
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function earnedByDeposit(uint256 depositId) external view override returns (DepositRewardView memory reward) {
         DepositRecord storage deposit = deposits[depositId];
         if (deposit.owner == address(0)) {
@@ -323,7 +323,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         reward = _earnedByDeposit(deposit);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function claimableReferralReward(address user) external view override returns (uint256 amount) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -331,7 +331,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         amount = referralRewards[user];
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getUpline(address user) public view override returns (address, address, address) {
         if (user == address(0)) {
             revert AddressCannotBeZero();
@@ -342,23 +342,23 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         return (upline1, upline2, upline3);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getLockTiers() external view override returns (uint256[] memory, uint256[] memory) {
         return (durations, boosts);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getReferralRates() external view override returns (uint256, uint256, uint256, uint256) {
         return (inviteeBoost, level1, level2, level3);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getPenaltyConfig() external view override returns (uint256 configuredPenaltyRate, address configuredTreasury) {
         configuredPenaltyRate = penaltyRate;
         configuredTreasury = treasury;
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getSubsidyConfig() external view override returns (SubsidyConfigView memory config) {
         config = SubsidyConfigView({
             maxSubsidyRate: maxSubsidyRate,
@@ -369,7 +369,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         });
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function getRewardSchedule() external view override returns (RewardScheduleView memory schedule) {
         schedule = RewardScheduleView({
             rewardsDuration: rewardsDuration,
@@ -380,12 +380,12 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         });
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function isRewardPeriodActive() public view override returns (bool active) {
         active = rewardRate > 0 && block.timestamp < periodFinish;
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function rewardPerToken() public view override returns (uint256) {
         if (totalSupply == 0) {
             return rewardPerTokenStored;
@@ -393,12 +393,12 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         return rewardPerTokenStored + (rewardRate * (lastTimeRewardApplicable() - lastUpdateTime)) / totalSupply;
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function lastTimeRewardApplicable() public view override returns (uint256 timestamp) {
         timestamp = Math.min(block.timestamp, periodFinish);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function remainingBaseReward() public view override returns (uint256) {
         if (block.timestamp >= periodFinish) {
             return 0;
@@ -406,7 +406,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         return (rewardRate * (periodFinish - block.timestamp)) / PRECISION;
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function maxSweepableSubsidy() public view override returns (uint256) {
         uint256 syncedUnsettledLiability = unsettledMaxSubsidyLiability;
         uint256 applicableTime = lastTimeRewardApplicable();
@@ -429,7 +429,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     // User actions
     // ---------------------------------------------------------------------
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function stake(
         uint256 amount,
         uint256 lockDuration,
@@ -473,19 +473,19 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         emit Staked(msg.sender, depositId, actualAmount, lockDuration, unlockTime, boostRate);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function claimAll() external override nonReentrant updateReward(msg.sender) assertAssetCoverage {
         _claimAll(msg.sender);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function withdraw(uint256 depositId) external override nonReentrant updateReward(msg.sender) assertAssetCoverage {
         WithdrawAccounting memory accounting = _withdrawDepositToAccounting(msg.sender, depositId);
         _writeRewardCheckpoint();
         _payWithdrawAccounting(msg.sender, accounting);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function withdrawMultiple(uint256[] calldata depositIds) external override nonReentrant updateReward(msg.sender) assertAssetCoverage {
         if (depositIds.length == 0) {
             revert EmptyDepositIds();
@@ -503,7 +503,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         _payWithdrawAccounting(msg.sender, accounting);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function exit() external override nonReentrant updateReward(msg.sender) assertAssetCoverage {
         uint256[] memory ids = activeDepositIds[msg.sender];
         WithdrawAccounting memory accounting = WithdrawAccounting({principalReturned: 0, penaltyAmount: 0, rewardPaid: 0});
@@ -521,7 +521,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     // Operator actions
     // ---------------------------------------------------------------------
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function notifyRewardAmount(
         uint256 baseRewardAmount
     ) external override nonReentrant onlyRole(OPERATOR_ROLE) whenNotPaused updateReward(address(0)) assertAssetCoverage {
@@ -567,7 +567,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
     // Admin actions
     // ---------------------------------------------------------------------
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function setTreasury(address newTreasury) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newTreasury == address(0)) {
             revert AddressCannotBeZero();
@@ -576,7 +576,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         emit TreasuryUpdated(newTreasury);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function sweepSubsidy(
         address to,
         uint256 amount
@@ -595,7 +595,7 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         emit SubsidySwept(to, amount);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function sweepExpiredBaseReward(
         address to
     ) external override nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) whenNotPaused updateReward(address(0)) assertAssetCoverage {
@@ -621,17 +621,17 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2, AccessControl, Pausabl
         emit ExpiredBaseRewardSwept(to, amount);
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function pause() external override onlyRole(DEFAULT_ADMIN_ROLE) {
         _pause();
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function unpause() external override onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
-    /// @inheritdoc IStakingPoolV2
+    /// @inheritdoc IStakingPoolV2Core
     function recoverERC20(address token, uint256 amount) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         if (token == address(0)) {
             revert AddressCannotBeZero();

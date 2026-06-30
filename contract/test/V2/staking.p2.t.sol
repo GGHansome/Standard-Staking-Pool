@@ -298,17 +298,6 @@ contract V2StakingPoolP2Test is V2StakingPoolBase {
         assertLe((1_000 ether * MAX_SUBSIDY_CAP) / BPS - pool.subsidyReserve(), subsidyReserve);
     }
 
-    function test_HarnessReferral_RevertWhenCycleDetected() public {
-        V2StakingPoolHarness harness = new V2StakingPoolHarness(_defaultParams(address(stakingToken), address(rewardToken)));
-        harness.setInviterState(user1, address(0), false);
-        harness.setInviterState(user2, user1, true);
-        harness.setInviterState(user3, user2, true);
-        harness.setInviterState(user4, user3, true);
-
-        vm.expectRevert(IStakingPoolV2Errors.ReferralCycleDetected.selector);
-        harness.exposedSettleInviter(user1, user4);
-    }
-
     function test_HarnessRemoveActiveDeposit_NoopsWhenDepositIsNotActive() public {
         V2StakingPoolHarness harness = new V2StakingPoolHarness(_defaultParams(address(stakingToken), address(rewardToken)));
 

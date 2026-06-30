@@ -49,8 +49,8 @@ interface IStakingPoolV2Errors {
     /// @notice 邀请人无效。
     error InvalidInviter();
 
-    /// @notice 邀请关系会形成循环。
-    error ReferralCycleDetected();
+    /// @notice 三级返佣比例未构成从 L1 开始的连续前缀（出现 L2>0 而 L1==0，或 L3>0 而 L2==0）。
+    error InvalidReferralRateConfig();
 
     /// @notice 锁仓期限列表和加成列表长度不一致。
     error LockTierLengthMismatch();

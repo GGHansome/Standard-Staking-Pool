@@ -770,26 +770,16 @@ contract V2StakingPoolP0Test is V2StakingPoolBase {
         assertEq(pool.claimableReferralReward(user1), 0);
     }
 
-    function test_ReferralReward_ZeroLevelRateStopsExpectedLevel() public {
+    function test_ReferralReward_RevertWhenLevelRatesNotContiguousPrefix() public {
+        // 三级返佣比例必须构成从 L1 开始的连续前缀。level2=0 而 level1、level3 非零会在
+        // 邀请链上形成「跳过 L2、却发 L3」的空洞，属于非法配置，必须在部署期 revert，
+        // 避免预算按求和预留却永不发放的资金沉淀。
         StakingPoolTypes.ConstructorParams memory params = _defaultParams(address(stakingToken), address(rewardToken));
         (params.durations, params.boosts) = _oneLockTier(SHORT_LOCK, SHORT_BOOST);
         params.level2 = 0;
         params.maxSubsidyRateCap = 10_000;
-        StakingPool zeroLevelPool = _deployWithParams(params);
-        _fundAndApproveDefault(zeroLevelPool, stakingToken, rewardToken);
-        vm.prank(user1);
-        zeroLevelPool.stake(100 ether, 0, address(0));
-        vm.prank(user2);
-        zeroLevelPool.stake(100 ether, 0, user1);
-        vm.prank(user3);
-        zeroLevelPool.stake(100 ether, 0, user2);
-        vm.prank(operator);
-        zeroLevelPool.notifyRewardAmount(1_000 ether);
-        vm.warp(block.timestamp + 1 days);
-        vm.prank(user3);
-        zeroLevelPool.claimAll();
-        assertGt(zeroLevelPool.claimableReferralReward(user2), 0);
-        assertEq(zeroLevelPool.claimableReferralReward(user1), 0);
+        vm.expectRevert(IStakingPoolV2Errors.InvalidReferralRateConfig.selector);
+        _deployWithParams(params);
     }
 
     function test_ReferralReward_ClaimableReferralRewardUpdatesAfterAccrualAndClaim() public {

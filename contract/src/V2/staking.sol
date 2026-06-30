@@ -188,6 +188,13 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2Core, AccessControl, Pau
         penaltyRate = params.penaltyRate;
         maxSubsidyRateCap = params.maxSubsidyRateCap;
 
+        if (
+            (params.level2 != 0 && params.level1 == 0) ||
+            (params.level3 != 0 && params.level2 == 0)
+        ) {
+            revert InvalidReferralRateConfig();
+        }
+
         uint256 computedMaxSubsidyRate = params.inviteeBoost + params.level1 + params.level2 + params.level3;
         uint256 lockTierCount = params.durations.length;
         for (uint256 i = 0; i < lockTierCount; ++i) {
@@ -658,23 +665,22 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2Core, AccessControl, Pau
             uint256 naturalAttritionReward = Math.mulDiv(rewardRate, applicableTime - lastUpdateTime, PRECISION);
             uint256 consumedBase = Math.min(naturalAttritionReward, baseRewardReserve);
             baseRewardReserve -= consumedBase;
-            if (consumedBase > 0) {
-                settledBaseCumulative += consumedBase;
-                _syncUnsettledMaxSubsidyLiability();
-            }
+            settledBaseCumulative += consumedBase;
         }
 
         rewardPerTokenStored = rewardPerToken();
         lastUpdateTime = applicableTime;
 
-        if (account == address(0)) {
-            return;
+        if (account != address(0)) {
+            uint256[] storage ids = activeDepositIds[account];
+            for (uint256 i = 0; i < ids.length; ++i) {
+                _accrueDepositReward(deposits[ids[i]], ids[i]);
+            }
         }
 
-        uint256[] storage ids = activeDepositIds[account];
-        for (uint256 i = 0; i < ids.length; ++i) {
-            _accrueDepositReward(deposits[ids[i]], ids[i]);
-        }
+        // settledBaseCumulative 在本次结算内可能被自然损耗分支与每笔仓位多次累加，
+        // 但 unsettledMaxSubsidyLiability 只依赖其终值，故全局负债在此统一同步一次。
+        _syncUnsettledMaxSubsidyLiability();
     }
 
     /// @notice 领取用户所有活跃仓位奖励和推荐奖励。
@@ -868,7 +874,6 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2Core, AccessControl, Pau
         totalPendingSubsidy += subsidyReward;
 
         settledBaseCumulative += baseReward;
-        _syncUnsettledMaxSubsidyLiability();
 
         if (inviteeBoostReward > 0) {
             emit InviteeBoostRewardAccrued(deposit.owner, depositId, inviteeBoostReward);
@@ -988,10 +993,6 @@ contract StakingPool is StakingPoolTypes, IStakingPoolV2Core, AccessControl, Pau
         }
         if (inviter == user || !hasSetInviter[inviter]) {
             revert InvalidInviter();
-        }
-        (address upline1, address upline2, address upline3) = getUpline(inviter);
-        if (upline1 == user || upline2 == user || upline3 == user) {
-            revert ReferralCycleDetected();
         }
         inviterOf[user] = inviter;
         emit InviterBound(user, inviter);

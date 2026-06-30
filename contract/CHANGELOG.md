@@ -1,5 +1,21 @@
 # 修改日志 (Changelog)
 
+**2026-06-30**
+
+**src/V2/staking.sol**
+- **将最大补贴负债同步从仓位粒度上提到交易粒度**：`unsettledMaxSubsidyLiability` 仅由全局累计量派生，与仓位无关，原先放在 `_accrueDepositReward` 内、被 `_updateReward` 的仓位循环逐个触发，导致 N 个仓位时同步重算并发事件 N 次。现收敛为 `_accrueDepositReward` 仅累加 `settledBaseCumulative`、同步上提到 `_updateReward` 末尾统一执行一次，终值不变，O(N) 降为 O(1)。
+- **修复推荐返佣层级跳空导致的补贴资金沉淀**：构造函数新增三级返佣前缀连续性校验，要求 `level2 > 0 ⟹ level1 > 0` 且 `level3 > 0 ⟹ level2 > 0`，否则以 `InvalidReferralRateConfig` 回退。此前 `_isReferralEnabled`（任一费率非零即启用）与预算预留（按 `inviteeBoost + level1 + level2 + level3` 求和）只看费率是否非零，而发放侧 `_accrueReferralRewards` 在 `level1 == 0` 时直接短路整条链；部署 `level1 == 0 且 level2/level3 > 0` 时会出现「邀请关系照常绑定、补贴预算照常预扣，但 L2/L3 奖励永不发放」的资金沉淀。将约束前移到构造函数，使预算口径与发放口径恒一致。`inviteeBoost` 受益人为被邀请人本人、不消费返佣链，与三级返佣保持正交，二者互不强制（`boost-only` 仍是合法的纯获客补贴配置）。
+- **删除 `_settleInviter` 中的死代码环检测**：邀请关系为 append-only 森林（每地址仅绑定一次、`inviterOf` 绑定后不可改写、邀请人必须已绑定），用户首次绑定时尚不可能是任何已存在邀请链的祖先，结构性无环。原 `getUpline` 向上三级比对 + `ReferralCycleDetected` 回退永不可达，移除并替换为不变量注释（前提：若未来引入改绑能力须恢复环检测）。
+
+**src/V2/errors.sol**
+- **同步推荐配置错误定义**：新增 `InvalidReferralRateConfig`（返佣比例未构成从 L1 开始的连续前缀）；移除已无引用的 `ReferralCycleDetected`。
+
+**PRD/V2/PRD_V2_Staking.md**
+- **同步推荐模块约束与无环说明（对应章节：3.5、6.2、7.3、7.4）**：将「有效邀请人」中的「向上 3 级不成环」改为 append-only 森林结构性无环说明；将「灵活降级」由原「遇 `level2 == 0` 跳过后续层级」改写为前缀连续约束，列出三种合法降级配置并禁止跳级空洞；构造函数校验新增「推荐返佣层级连续性校验」要点，写明 revert 条件、资金沉淀根因与 `inviteeBoost` 正交性；7.3 节「费率 0 短路跳出」改为「前缀短路」；7.4 节「环形邀请验证边界」整条改写为「环形邀请结构性排除」。
+
+**test/V2/staking.p0.t.sol / staking.p2.t.sol**
+- **更新推荐配置回归测试**：将 `test_ReferralReward_ZeroLevelRateStopsExpectedLevel`（验证跳级停止）改写为 `test_ReferralReward_RevertWhenLevelRatesNotContiguousPrefix`，断言 `level2 == 0 且 level3 > 0` 的跳空配置在部署期以 `InvalidReferralRateConfig` 回退；移除依赖 harness 绕过正常绑定流程伪造环的 `test_HarnessReferral_RevertWhenCycleDetected`。
+
 **2026-06-25**
 
 **PRD/V2/PRD_V2_Staking.md**

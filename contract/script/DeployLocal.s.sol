@@ -2,21 +2,23 @@
 pragma solidity 0.8.28;
 
 import "forge-std/Script.sol";
-import "../src/V1/staking.sol";
+import "../src/V2/staking.sol";
+import "../src/V2/types.sol";
 import "../test/mocks/MockERC20.sol";
 
 /**
  * @title DeployLocal
- * @notice 在 anvil 等本地 EVM 上一键部署 StakingPool 及其测试用 ERC20。
+ * @notice 在 anvil 等本地 EVM 上一键部署 StakingPool V2 及其测试用 ERC20。
  *
  * @dev 行为：
  *      1. 部署两个 MockERC20 作为 staking / reward token；
- *      2. 部署 StakingPool，将 admin 与 operator 都设为部署者，方便单钱包体验全部角色；
- *      3. 调用 setRewardsDuration 完成最少初始化；
- *      4. 给 anvil 默认账户 0..9 各 mint 一份 staking 与 reward 代币；
- *      5. 用部署者钱包给 pool 预先 approve reward token，前端 notifyRewardAmount 不再需要单独发授权交易；
- *      6. 在控制台打印关键地址，可直接复制到 frontend/.env。
+ *      2. 用 ConstructorParams 一次性完成 V2 初始化（资产 / 角色 / 奖励周期 / 三级推荐 / 罚金 / 锁仓档位），
+ *         admin 与 operator 都设为部署者，treasury 也指向部署者，方便单钱包体验全部角色；
+ *      3. 给 anvil 默认账户 0..9 各 mint 一份 staking 与 reward 代币；
+ *      4. 用部署者钱包给 pool 预先 approve reward token，前端 notifyRewardAmount 不再需要单独发授权交易；
+ *      5. 在控制台打印关键地址，可直接复制到 frontend/.env。
  *
+ * @dev V2 的奖励周期在构造期固定（已无 setRewardsDuration），故全部初始化集中在构造函数。
  * @dev 仅用于本地开发，绝对不要在主网或公共测试网执行。
  *
  * 用法：
@@ -29,7 +31,21 @@ import "../test/mocks/MockERC20.sol";
  */
 contract DeployLocal is Script {
     /// @notice 奖励周期，前端默认假设 7 天。
-    uint256 public constant REWARDS_DURATION = 7 days;
+    uint256 public constant REWARDS_DURATION = 90 days;
+
+    /// @notice 被邀请人自身加成比例（BPS），5% = 500。
+    uint256 public constant INVITEE_BOOST = 500;
+    /// @notice 一级邀请人返佣比例（BPS），3% = 300。
+    uint256 public constant LEVEL1_RATE = 300;
+    /// @notice 二级邀请人返佣比例（BPS），2% = 200。
+    uint256 public constant LEVEL2_RATE = 200;
+    /// @notice 三级邀请人返佣比例（BPS），1% = 100。
+    uint256 public constant LEVEL3_RATE = 100;
+    /// @notice 提前退出罚金比例（BPS），10% = 1000。
+    uint256 public constant PENALTY_RATE = 1_000;
+
+    /// @notice 最大补贴比例上限（BPS）。须 >= 推荐比例之和 + 最大锁仓加成 = 500+300+200+100+5000 = 6100，取 7000 留余量。
+    uint256 public constant MAX_SUBSIDY_RATE_CAP = 7_000;
 
     /// @notice 给每个 anvil 默认账户 mint 的 staking token 数量。
     uint256 public constant STAKING_TOKEN_MINT = 1_000_000 ether;
@@ -59,14 +75,34 @@ contract DeployLocal is Script {
         MockERC20 stakingToken = new MockERC20("Mock Staking Token", "STK", 18);
         MockERC20 rewardToken = new MockERC20("Mock Reward Token", "RWD", 18);
 
-        StakingPool pool = new StakingPool(
-            address(stakingToken),
-            address(rewardToken),
-            deployer,
-            deployer
-        );
+        // 示例锁仓档位：7 天 +10%、30 天 +20%、60 天 +50%（活期 0% 由空档隐式表达，stake 时传 lockDuration=0）。
+        uint256[] memory durations = new uint256[](3);
+        uint256[] memory boosts = new uint256[](3);
+        durations[0] = 7 days;
+        boosts[0] = 1_000;
+        durations[1] = 30 days;
+        boosts[1] = 2_000;
+        durations[2] = 60 days;
+        boosts[2] = 5_000;
 
-        pool.setRewardsDuration(REWARDS_DURATION);
+        StakingPoolTypes.ConstructorParams memory params = StakingPoolTypes.ConstructorParams({
+            stakingToken: address(stakingToken),
+            rewardToken: address(rewardToken),
+            admin: deployer,
+            operator: 0x0000000000000000000000000000000000000000,
+            treasury: deployer,
+            rewardsDuration: REWARDS_DURATION,
+            inviteeBoost: INVITEE_BOOST,
+            level1: LEVEL1_RATE,
+            level2: LEVEL2_RATE,
+            level3: LEVEL3_RATE,
+            penaltyRate: PENALTY_RATE,
+            maxSubsidyRateCap: MAX_SUBSIDY_RATE_CAP,
+            durations: durations,
+            boosts: boosts
+        });
+
+        StakingPool pool = new StakingPool(params);
 
         for (uint256 i = 0; i < ANVIL_ACCOUNTS.length; i++) {
             stakingToken.mint(ANVIL_ACCOUNTS[i], STAKING_TOKEN_MINT);
@@ -78,11 +114,14 @@ contract DeployLocal is Script {
         vm.stopBroadcast();
 
         console.log("================ Deployment Result ================");
-        console.log("Deployer / Admin / Operator :", deployer);
+        console.log("Deployer / Admin / Operator / Treasury :", deployer);
         console.log("StakingPool                 :", address(pool));
         console.log("StakingToken (STK)          :", address(stakingToken));
         console.log("RewardToken  (RWD)          :", address(rewardToken));
         console.log("Rewards duration (seconds)  :", REWARDS_DURATION);
+        console.log("Lock tier #1 (7d   boost bps):", boosts[0]);
+        console.log("Lock tier #2 (30d  boost bps):", boosts[1]);
+        console.log("Lock tier #3 (60d  boost bps):", boosts[2]);
         console.log("===================================================");
         console.log("Copy into frontend/.env :");
         console.log("VITE_STAKING_POOL_ADDRESS=", address(pool));

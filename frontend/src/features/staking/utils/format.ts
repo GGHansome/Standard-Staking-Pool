@@ -86,16 +86,75 @@ export function formatRewardRate(value?: number, symbol = ''): string {
   return `${formatReadableNumber(value!)} ${symbol}/秒`.trim()
 }
 
-export function formatCountdown(periodFinish: bigint): string {
-  const finishMs = Number(periodFinish) * 1000
-  if (!Number.isFinite(finishMs) || finishMs <= Date.now()) {
+export function formatCountdown(periodFinish: bigint, chainTimestamp?: bigint): string {
+  if (chainTimestamp === undefined) {
+    return '--'
+  }
+  if (periodFinish <= chainTimestamp) {
     return '已结束'
   }
 
-  const totalSeconds = Math.floor((finishMs - Date.now()) / 1000)
+  const totalSeconds = Number(periodFinish - chainTimestamp)
+  if (!Number.isFinite(totalSeconds)) {
+    return '--'
+  }
+
   const days = Math.floor(totalSeconds / 86_400)
   const hours = Math.floor((totalSeconds % 86_400) / 3_600)
   const minutes = Math.floor((totalSeconds % 3_600) / 60)
 
   return `${days}天 ${hours}小时 ${minutes}分钟`
+}
+
+export const BPS_BASE = 10_000
+
+export function formatBps(value: bigint, maxFractionDigits = 2): string {
+  const percent = Number(value) / 100
+  if (!Number.isFinite(percent)) {
+    return '--'
+  }
+
+  return `${new Intl.NumberFormat('en-US', { maximumFractionDigits: maxFractionDigits }).format(percent)}%`
+}
+
+export function formatDuration(seconds: bigint): string {
+  const total = Number(seconds)
+  if (!Number.isFinite(total) || total <= 0) {
+    return '活期'
+  }
+
+  const days = Math.floor(total / 86_400)
+  if (days > 0) {
+    return `${days} 天`
+  }
+
+  const hours = Math.floor(total / 3_600)
+  if (hours > 0) {
+    return `${hours} 小时`
+  }
+
+  return `${Math.floor(total / 60)} 分钟`
+}
+
+export function formatUnlockTime(unlockTime: bigint, chainTimestamp?: bigint): string {
+  if (unlockTime === 0n) {
+    return '活期'
+  }
+
+  const unlockMs = Number(unlockTime) * 1000
+  const label = new Date(unlockMs).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  return chainTimestamp !== undefined && isMatured(unlockTime, chainTimestamp)
+    ? `${label}（已到期）`
+    : label
+}
+
+export function isMatured(unlockTime: bigint, chainTimestamp: bigint): boolean {
+  return unlockTime === 0n || unlockTime <= chainTimestamp
 }

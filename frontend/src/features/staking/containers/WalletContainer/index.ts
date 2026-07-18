@@ -1,0 +1,1 @@
+export { WalletContainer } from './WalletContainer'
